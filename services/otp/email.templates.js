@@ -3,6 +3,9 @@
  * HTML email templates for various purposes
  */
 
+const APP_NAME = 'EsportsHistories';
+const BRAND_TAGLINE = 'Tournaments, profiles, and competitive play in one place.';
+
 /**
  * Generate OTP email HTML template
  * @param {Object} params - Template parameters
@@ -12,23 +15,19 @@
  * @returns {string} HTML email content
  */
 const generateOTPEmailTemplate = ({ otpCode, name = 'User', purpose = 'registration' }) => {
-  // Determine email content based on purpose
   const isPasswordReset = purpose === 'password_reset';
-  const headerTitle = isPasswordReset ? 'Password Reset Request' : 'Welcome to BooyahX!';
-  const mainTitle = isPasswordReset ? 'Reset Your Password' : `Hello ${name},`;
-  const mainMessage = isPasswordReset 
-    ? `We received a request to reset your password for your BooyahX account. Use the verification code below to reset your password. If you didn't request this, please ignore this email and your password will remain unchanged.`
-    : `Welcome to BooyahX! We're excited to have you join our gaming community. To complete your registration and secure your account, please verify your email address using the code below.`;
-  const actionText = isPasswordReset 
-    ? 'Use this code to reset your password:'
-    : 'Your OTP verification code is:';
+  const bannerTitle = isPasswordReset ? 'Password reset' : 'Verify your email';
+  const greeting = isPasswordReset ? 'Hello,' : `Hello ${name},`;
+  const mainMessage = isPasswordReset
+    ? `We received a request to reset the password for your ${APP_NAME} account. Enter the code below to continue. If you did not request this, you can ignore this email—your password will stay the same.`
+    : `Thanks for joining ${APP_NAME}. Enter this one-time code in the app to confirm your email and finish setting up your account.`;
+  const actionText = isPasswordReset ? 'Your password reset code' : 'Your verification code';
   const expirationText = isPasswordReset
-    ? 'Please use it promptly to reset your password.'
-    : 'Please use it promptly to complete your verification.';
-  
-  const warningBgColor = isPasswordReset ? '#ffe6e6' : '#fff5e6';
-  const warningBorderColor = isPasswordReset ? '#ef4444' : '#ffa726';
-  const warningTextColor = isPasswordReset ? '#dc2626' : '#e65100';
+    ? 'Use it promptly to complete your password reset.'
+    : 'Use it promptly to finish your registration.';
+  const warnBg = isPasswordReset ? '#faf0f0' : '#faf6ed';
+  const warnBorder = isPasswordReset ? '#b45309' : '#9a7b0a';
+  const warnText = isPasswordReset ? '#78350f' : '#713f12';
   const otpExpireMinutes = process.env.OTP_EXPIRE_MINUTES || 5;
   const currentYear = new Date().getFullYear();
 
@@ -39,72 +38,53 @@ const generateOTPEmailTemplate = ({ otpCode, name = 'User', purpose = 'registrat
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f5f7fa; padding: 40px 20px;">
+    <body style="margin:0;padding:0;background-color:#e8e4dc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#e8e4dc;padding:48px 16px;">
         <tr>
           <td align="center">
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); overflow: hidden;">
-              <!-- Header with gradient -->
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="560" style="max-width:560px;background-color:#fdfcfa;border:1px solid #d4cec3;">
               <tr>
-                <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">${headerTitle}</h1>
-                  <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 16px; opacity: 0.95;">Powered by GamingHub Allday</p>
+                <td style="background-color:#12100e;padding:32px 28px;text-align:center;border-bottom:3px solid #c9a227;">
+                  <p style="margin:0 0 10px 0;color:#c9a227;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;font-weight:600;">${APP_NAME}</p>
+                  <h1 style="margin:0;color:#faf8f5;font-size:22px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;letter-spacing:-0.02em;line-height:1.3;">${bannerTitle}</h1>
+                  <p style="margin:14px 0 0 0;color:rgba(250,248,245,0.78);font-size:13px;line-height:1.5;">${BRAND_TAGLINE}</p>
                 </td>
               </tr>
-              
-              <!-- Welcome Message -->
               <tr>
-                <td style="padding: 40px 30px 20px 30px;">
-                  <h2 style="margin: 0 0 15px 0; color: #1a202c; font-size: 24px; font-weight: 600;">${mainTitle}</h2>
-                  <p style="margin: 0 0 20px 0; color: #4a5568; font-size: 16px; line-height: 1.6;">
-                    ${mainMessage}
-                  </p>
+                <td style="padding:36px 32px 8px 32px;">
+                  <p style="margin:0 0 8px 0;color:#6b6560;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;">${isPasswordReset ? 'Security' : 'Sign-up'}</p>
+                  <h2 style="margin:0 0 16px 0;color:#1a1816;font-size:20px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">${greeting}</h2>
+                  <p style="margin:0 0 28px 0;color:#494540;font-size:15px;line-height:1.65;">${mainMessage}</p>
+                  <p style="margin:0 0 12px 0;color:#6b6560;font-size:13px;font-weight:500;text-align:center;">${actionText}</p>
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                    <tr>
+                      <td align="center" style="padding:26px 16px;background-color:#f5f2ec;border:1px solid #d4cec3;">
+                        <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:30px;font-weight:700;letter-spacing:0.22em;color:#1a1816;">${otpCode}</p>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              
-              <!-- OTP Code Box -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <p style="margin: 0 0 15px 0; color: #4a5568; font-size: 14px; font-weight: 500; text-align: center;">${actionText}</p>
-                  <div style="background: linear-gradient(135deg, #f6f8fb 0%, #e9ecef 100%); border: 2px solid #e2e8f0; border-radius: 10px; padding: 30px 20px; text-align: center; margin: 0 auto;">
-                    <h1 style="margin: 0; letter-spacing: 8px; color: #667eea; font-size: 36px; font-weight: 700; font-family: 'Courier New', monospace;">${otpCode}</h1>
-                  </div>
-                </td>
-              </tr>
-              
-              <!-- Expiration Notice -->
-              <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background-color: ${warningBgColor}; border-left: 4px solid ${warningBorderColor}; padding: 15px 20px; border-radius: 6px;">
-                    <p style="margin: 0; color: ${warningTextColor}; font-size: 14px; line-height: 1.5;">
-                      <strong>⏰ Important:</strong> This code expires in <strong>${otpExpireMinutes} minutes</strong>. 
-                      ${expirationText}
+                <td style="padding:24px 32px 8px 32px;">
+                  <div style="background-color:${warnBg};border-left:3px solid ${warnBorder};padding:14px 18px;">
+                    <p style="margin:0;color:${warnText};font-size:13px;line-height:1.55;">
+                      <strong>Important:</strong> This code expires in <strong>${otpExpireMinutes} minutes</strong>. ${expirationText}
                     </p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Security Notice -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <p style="margin: 0; color: #718096; font-size: 13px; line-height: 1.6; text-align: center;">
-                    For your security, never share this code with anyone. Our team will never ask for your OTP.
+                <td style="padding:20px 32px 32px 32px;">
+                  <p style="margin:0;color:#7a726a;font-size:12px;line-height:1.6;text-align:center;">
+                    Do not share this code with anyone. ${APP_NAME} will never ask you for this code by phone or social media.
                   </p>
                 </td>
               </tr>
-              
-              <!-- Footer -->
               <tr>
-                <td style="background-color: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
-                  <p style="margin: 0 0 10px 0; color: #718096; font-size: 14px;">
-                    <strong style="color: #2d3748;">BooyahX</strong> - Your Ultimate Gaming Experience
-                  </p>
-                  <p style="margin: 0 0 10px 0; color: #a0aec0; font-size: 12px;">
-                    Powered by <strong style="color: #667eea;">GamingHub Allday</strong>
-                  </p>
-                  <p style="margin: 15px 0 0 0; color: #cbd5e0; font-size: 11px;">
-                    © ${currentYear} BooyahX. All rights reserved.
-                  </p>
+                <td style="background-color:#f5f2ec;padding:24px 28px;text-align:center;border-top:1px solid #d4cec3;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-family:Georgia,'Times New Roman',Times,serif;font-weight:600;">${APP_NAME}</p>
+                  <p style="margin:0;color:#7a726a;font-size:11px;">© ${currentYear} ${APP_NAME}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
@@ -122,9 +102,9 @@ const generateOTPEmailTemplate = ({ otpCode, name = 'User', purpose = 'registrat
  * @returns {string} Email subject
  */
 const getOTPEmailSubject = (purpose = 'registration') => {
-  return purpose === 'password_reset' 
-    ? 'Password Reset OTP - BooyahX'
-    : 'Your OTP Verification Code - BooyahX';
+  return purpose === 'password_reset'
+    ? `${APP_NAME} — Password reset code`
+    : `${APP_NAME} — Your verification code`;
 };
 
 /**
@@ -144,74 +124,57 @@ const generateWelcomeEmailTemplate = ({ name = 'User', password }) => {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f5f7fa; padding: 40px 20px;">
+    <body style="margin:0;padding:0;background-color:#e8e4dc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#e8e4dc;padding:48px 16px;">
         <tr>
           <td align="center">
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); overflow: hidden;">
-              <!-- Header with gradient -->
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="560" style="max-width:560px;background-color:#fdfcfa;border:1px solid #d4cec3;">
               <tr>
-                <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">Welcome to BooyahX!</h1>
-                  <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 16px; opacity: 0.95;">Powered by GamingHub Allday</p>
+                <td style="background-color:#12100e;padding:32px 28px;text-align:center;border-bottom:3px solid #c9a227;">
+                  <p style="margin:0 0 10px 0;color:#c9a227;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;font-weight:600;">${APP_NAME}</p>
+                  <h1 style="margin:0;color:#faf8f5;font-size:22px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Welcome</h1>
+                  <p style="margin:14px 0 0 0;color:rgba(250,248,245,0.78);font-size:13px;line-height:1.5;">${BRAND_TAGLINE}</p>
                 </td>
               </tr>
-              
-              <!-- Welcome Message -->
               <tr>
-                <td style="padding: 40px 30px 20px 30px;">
-                  <h2 style="margin: 0 0 15px 0; color: #1a202c; font-size: 24px; font-weight: 600;">Hello ${name},</h2>
-                  <p style="margin: 0 0 20px 0; color: #4a5568; font-size: 16px; line-height: 1.6;">
-                    Welcome to BooyahX! We're thrilled to have you join our gaming community. Your account has been successfully created using Google login.
+                <td style="padding:36px 32px 8px 32px;">
+                  <h2 style="margin:0 0 16px 0;color:#1a1816;font-size:20px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Hello ${name},</h2>
+                  <p style="margin:0 0 16px 0;color:#494540;font-size:15px;line-height:1.65;">
+                    Your ${APP_NAME} account was created with Google sign-in. You can keep using Google, or sign in with email and the temporary password below if you prefer.
                   </p>
-                  <p style="margin: 0 0 20px 0; color: #4a5568; font-size: 16px; line-height: 1.6;">
-                    For your convenience, we've generated a default password for your account. You can use this password to login directly without Google authentication if you prefer.
+                  <p style="margin:0 0 24px 0;color:#494540;font-size:15px;line-height:1.65;">
+                    Please store this password somewhere safe. We recommend changing it after your first login.
                   </p>
+                  <p style="margin:0 0 12px 0;color:#6b6560;font-size:13px;font-weight:500;text-align:center;">Your temporary password</p>
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                    <tr>
+                      <td align="center" style="padding:22px 16px;background-color:#f5f2ec;border:1px solid #d4cec3;">
+                        <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:22px;font-weight:700;letter-spacing:0.06em;color:#1a1816;word-break:break-all;">${password}</p>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              
-              <!-- Password Box -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <p style="margin: 0 0 15px 0; color: #4a5568; font-size: 14px; font-weight: 500; text-align: center;">Your default password is:</p>
-                  <div style="background: linear-gradient(135deg, #f6f8fb 0%, #e9ecef 100%); border: 2px solid #e2e8f0; border-radius: 10px; padding: 30px 20px; text-align: center; margin: 0 auto;">
-                    <h1 style="margin: 0; letter-spacing: 2px; color: #667eea; font-size: 28px; font-weight: 700; font-family: 'Courier New', monospace; word-break: break-all;">${password}</h1>
-                  </div>
-                </td>
-              </tr>
-              
-              <!-- Important Notice -->
-              <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background-color: #fff5e6; border-left: 4px solid #ffa726; padding: 15px 20px; border-radius: 6px;">
-                    <p style="margin: 0; color: #e65100; font-size: 14px; line-height: 1.5;">
-                      <strong>🔐 Important:</strong> Please save this password securely. You can use it to login directly to your account without Google authentication. For security reasons, we recommend changing this password after your first login.
+                <td style="padding:24px 32px 8px 32px;">
+                  <div style="background-color:#faf6ed;border-left:3px solid #9a7b0a;padding:14px 18px;">
+                    <p style="margin:0;color:#713f12;font-size:13px;line-height:1.55;">
+                      <strong>Important:</strong> Do not share this password. ${APP_NAME} will never ask for it by message or phone.
                     </p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Security Notice -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <p style="margin: 0; color: #718096; font-size: 13px; line-height: 1.6; text-align: center;">
-                    For your security, never share this password with anyone. Our team will never ask for your password.
+                <td style="padding:20px 32px 32px 32px;">
+                  <p style="margin:0;color:#7a726a;font-size:12px;line-height:1.6;text-align:center;">
+                    For your security, treat this like any other account credential.
                   </p>
                 </td>
               </tr>
-              
-              <!-- Footer -->
               <tr>
-                <td style="background-color: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
-                  <p style="margin: 0 0 10px 0; color: #718096; font-size: 14px;">
-                    <strong style="color: #2d3748;">BooyahX</strong> - Your Ultimate Gaming Experience
-                  </p>
-                  <p style="margin: 0 0 10px 0; color: #a0aec0; font-size: 12px;">
-                    Powered by <strong style="color: #667eea;">GamingHub Allday</strong>
-                  </p>
-                  <p style="margin: 15px 0 0 0; color: #cbd5e0; font-size: 11px;">
-                    © ${currentYear} BooyahX. All rights reserved.
-                  </p>
+                <td style="background-color:#f5f2ec;padding:24px 28px;text-align:center;border-top:1px solid #d4cec3;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-family:Georgia,'Times New Roman',Times,serif;font-weight:600;">${APP_NAME}</p>
+                  <p style="margin:0;color:#7a726a;font-size:11px;">© ${currentYear} ${APP_NAME}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
@@ -228,7 +191,7 @@ const generateWelcomeEmailTemplate = ({ name = 'User', password }) => {
  * @returns {string} Email subject
  */
 const getWelcomeEmailSubject = () => {
-  return 'Welcome to BooyahX - Your Account Details';
+  return `${APP_NAME} — Welcome, your account is ready`;
 };
 
 /**
@@ -257,87 +220,62 @@ const generateInquiryEmailTemplate = ({ name, email, subject, message }) => {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f5f7fa; padding: 40px 20px;">
+    <body style="margin:0;padding:0;background-color:#e8e4dc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#e8e4dc;padding:48px 16px;">
         <tr>
           <td align="center">
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); overflow: hidden;">
-              <!-- Header with gradient -->
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="560" style="max-width:560px;background-color:#fdfcfa;border:1px solid #d4cec3;">
               <tr>
-                <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">New Inquiry Received</h1>
-                  <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 16px; opacity: 0.95;">Powered by GamingHub Allday</p>
+                <td style="background-color:#12100e;padding:32px 28px;text-align:center;border-bottom:3px solid #c9a227;">
+                  <p style="margin:0 0 10px 0;color:#c9a227;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;font-weight:600;">${APP_NAME}</p>
+                  <h1 style="margin:0;color:#faf8f5;font-size:22px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">New inquiry</h1>
+                  <p style="margin:14px 0 0 0;color:rgba(250,248,245,0.78);font-size:13px;line-height:1.5;">${BRAND_TAGLINE}</p>
                 </td>
               </tr>
-              
-              <!-- Inquiry Details -->
               <tr>
-                <td style="padding: 40px 30px 20px 30px;">
-                  <h2 style="margin: 0 0 20px 0; color: #1a202c; font-size: 24px; font-weight: 600;">Contact Form Inquiry</h2>
-                  <p style="margin: 0 0 10px 0; color: #718096; font-size: 13px;">
-                    <strong style="color: #2d3748;">Date:</strong> ${formattedDate}
-                  </p>
+                <td style="padding:36px 32px 12px 32px;">
+                  <h2 style="margin:0 0 12px 0;color:#1a1816;font-size:18px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Contact form</h2>
+                  <p style="margin:0;color:#6b6560;font-size:12px;"><strong style="color:#1a1816;">Date:</strong> ${formattedDate}</p>
                 </td>
               </tr>
-              
-              <!-- Sender Information -->
               <tr>
-                <td style="padding: 0 30px 20px 30px;">
-                  <div style="background-color: #f7fafc; border-left: 4px solid #667eea; padding: 20px; border-radius: 6px;">
-                    <p style="margin: 0 0 10px 0; color: #2d3748; font-size: 16px; font-weight: 600;">From:</p>
-                    <p style="margin: 0 0 8px 0; color: #4a5568; font-size: 15px;">
-                      <strong>Name:</strong> ${name}
-                    </p>
-                    <p style="margin: 0; color: #4a5568; font-size: 15px;">
-                      <strong>Email:</strong> <a href="mailto:${email}" style="color: #667eea; text-decoration: none;">${email}</a>
+                <td style="padding:0 32px 20px 32px;">
+                  <div style="background-color:#f5f2ec;border-left:3px solid #c9a227;padding:18px 16px;">
+                    <p style="margin:0 0 10px 0;color:#1a1816;font-size:14px;font-weight:600;">From</p>
+                    <p style="margin:0 0 6px 0;color:#494540;font-size:14px;"><strong>Name:</strong> ${name}</p>
+                    <p style="margin:0;color:#494540;font-size:14px;">
+                      <strong>Email:</strong> <a href="mailto:${email}" style="color:#6b4f00;text-decoration:underline;">${email}</a>
                     </p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Subject -->
               <tr>
-                <td style="padding: 0 30px 20px 30px;">
-                  <p style="margin: 0 0 8px 0; color: #2d3748; font-size: 16px; font-weight: 600;">Subject:</p>
-                  <p style="margin: 0; color: #4a5568; font-size: 15px; padding: 12px; background-color: #f7fafc; border-radius: 6px;">
-                    ${subject}
-                  </p>
+                <td style="padding:0 32px 16px 32px;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-weight:600;">Subject</p>
+                  <p style="margin:0;color:#494540;font-size:14px;padding:12px 14px;background-color:#f5f2ec;border:1px solid #d4cec3;">${subject}</p>
                 </td>
               </tr>
-              
-              <!-- Message -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <p style="margin: 0 0 8px 0; color: #2d3748; font-size: 16px; font-weight: 600;">Message:</p>
-                  <div style="background-color: #f7fafc; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0;">
-                    <p style="margin: 0; color: #4a5568; font-size: 15px; line-height: 1.6; white-space: pre-wrap;">${message}</p>
+                <td style="padding:0 32px 24px 32px;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-weight:600;">Message</p>
+                  <div style="background-color:#f5f2ec;padding:16px;border:1px solid #d4cec3;">
+                    <p style="margin:0;color:#494540;font-size:14px;line-height:1.6;white-space:pre-wrap;">${message}</p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Action Notice -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background-color: #fff5e6; border-left: 4px solid #ffa726; padding: 15px 20px; border-radius: 6px;">
-                    <p style="margin: 0; color: #e65100; font-size: 14px; line-height: 1.5;">
-                      <strong>📧 Action Required:</strong> Please review this inquiry and respond to the user at <a href="mailto:${email}" style="color: #667eea; text-decoration: none;">${email}</a>
+                <td style="padding:0 32px 32px 32px;">
+                  <div style="background-color:#faf6ed;border-left:3px solid #9a7b0a;padding:14px 18px;">
+                    <p style="margin:0;color:#713f12;font-size:13px;line-height:1.55;">
+                      <strong>Action:</strong> Reply to <a href="mailto:${email}" style="color:#6b4f00;text-decoration:underline;">${email}</a>
                     </p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Footer -->
               <tr>
-                <td style="background-color: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
-                  <p style="margin: 0 0 10px 0; color: #718096; font-size: 14px;">
-                    <strong style="color: #2d3748;">BooyahX</strong> - Your Ultimate Gaming Experience
-                  </p>
-                  <p style="margin: 0 0 10px 0; color: #a0aec0; font-size: 12px;">
-                    Powered by <strong style="color: #667eea;">GamingHub Allday</strong>
-                  </p>
-                  <p style="margin: 15px 0 0 0; color: #cbd5e0; font-size: 11px;">
-                    © ${currentYear} BooyahX. All rights reserved.
-                  </p>
+                <td style="background-color:#f5f2ec;padding:24px 28px;text-align:center;border-top:1px solid #d4cec3;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-family:Georgia,'Times New Roman',Times,serif;font-weight:600;">${APP_NAME}</p>
+                  <p style="margin:0;color:#7a726a;font-size:11px;">© ${currentYear} ${APP_NAME}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
@@ -355,7 +293,7 @@ const generateInquiryEmailTemplate = ({ name, email, subject, message }) => {
  * @returns {string} Email subject
  */
 const getInquiryEmailSubject = (subject) => {
-  return `New Inquiry: ${subject} - BooyahX`;
+  return `${APP_NAME} — New inquiry: ${subject}`;
 };
 
 /**
@@ -369,13 +307,6 @@ const getInquiryEmailSubject = (subject) => {
  */
 const generateInquiryReplyEmailTemplate = ({ name, originalSubject, originalMessage, replyMessage }) => {
   const currentYear = new Date().getFullYear();
-  const formattedDate = new Date().toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
 
   return `
     <!DOCTYPE html>
@@ -384,75 +315,56 @@ const generateInquiryReplyEmailTemplate = ({ name, originalSubject, originalMess
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f5f7fa; padding: 40px 20px;">
+    <body style="margin:0;padding:0;background-color:#e8e4dc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#e8e4dc;padding:48px 16px;">
         <tr>
           <td align="center">
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); overflow: hidden;">
-              <!-- Header with gradient -->
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="560" style="max-width:560px;background-color:#fdfcfa;border:1px solid #d4cec3;">
               <tr>
-                <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">Response to Your Inquiry</h1>
-                  <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 16px; opacity: 0.95;">Powered by GamingHub Allday</p>
+                <td style="background-color:#12100e;padding:32px 28px;text-align:center;border-bottom:3px solid #c9a227;">
+                  <p style="margin:0 0 10px 0;color:#c9a227;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;font-weight:600;">${APP_NAME}</p>
+                  <h1 style="margin:0;color:#faf8f5;font-size:22px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Reply to your message</h1>
+                  <p style="margin:14px 0 0 0;color:rgba(250,248,245,0.78);font-size:13px;line-height:1.5;">${BRAND_TAGLINE}</p>
                 </td>
               </tr>
-              
-              <!-- Greeting -->
               <tr>
-                <td style="padding: 40px 30px 20px 30px;">
-                  <h2 style="margin: 0 0 15px 0; color: #1a202c; font-size: 24px; font-weight: 600;">Hello ${name},</h2>
-                  <p style="margin: 0 0 20px 0; color: #4a5568; font-size: 16px; line-height: 1.6;">
-                    Thank you for contacting us. We have received your inquiry and are pleased to provide you with the following response.
+                <td style="padding:36px 32px 8px 32px;">
+                  <h2 style="margin:0 0 16px 0;color:#1a1816;font-size:20px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Hello ${name},</h2>
+                  <p style="margin:0 0 24px 0;color:#494540;font-size:15px;line-height:1.65;">
+                    Thank you for contacting ${APP_NAME}. Here is our reply to your inquiry.
                   </p>
                 </td>
               </tr>
-              
-              <!-- Original Inquiry Reference -->
               <tr>
-                <td style="padding: 0 30px 20px 30px;">
-                  <div style="background-color: #f7fafc; border-left: 4px solid #cbd5e0; padding: 20px; border-radius: 6px;">
-                    <p style="margin: 0 0 10px 0; color: #2d3748; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Your Original Inquiry</p>
-                    <p style="margin: 0 0 8px 0; color: #4a5568; font-size: 15px;">
-                      <strong>Subject:</strong> ${originalSubject}
-                    </p>
-                    <p style="margin: 0; color: #718096; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">${originalMessage}</p>
+                <td style="padding:0 32px 20px 32px;">
+                  <div style="background-color:#f0eeea;border-left:3px solid #9a948a;padding:18px 16px;">
+                    <p style="margin:0 0 10px 0;color:#1a1816;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;">Your message</p>
+                    <p style="margin:0 0 8px 0;color:#494540;font-size:14px;"><strong>Subject:</strong> ${originalSubject}</p>
+                    <p style="margin:0;color:#6b6560;font-size:14px;line-height:1.6;white-space:pre-wrap;">${originalMessage}</p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Reply Message -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background-color: #f0f9ff; border-left: 4px solid #667eea; padding: 20px; border-radius: 6px;">
-                    <p style="margin: 0 0 10px 0; color: #2d3748; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Our Response</p>
-                    <p style="margin: 0; color: #1a202c; font-size: 15px; line-height: 1.6; white-space: pre-wrap;">${replyMessage}</p>
+                <td style="padding:0 32px 24px 32px;">
+                  <div style="background-color:#f5f2ec;border-left:3px solid #c9a227;padding:18px 16px;">
+                    <p style="margin:0 0 10px 0;color:#1a1816;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;">Our reply</p>
+                    <p style="margin:0;color:#1a1816;font-size:15px;line-height:1.65;white-space:pre-wrap;">${replyMessage}</p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Additional Help -->
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background-color: #fff5e6; border-left: 4px solid #ffa726; padding: 15px 20px; border-radius: 6px;">
-                    <p style="margin: 0; color: #e65100; font-size: 14px; line-height: 1.5;">
-                      <strong>💬 Need Further Assistance?</strong> If you have any additional questions or concerns, please feel free to reach out to us again. We're here to help!
+                <td style="padding:0 32px 32px 32px;">
+                  <div style="background-color:#faf6ed;border-left:3px solid #9a7b0a;padding:14px 18px;">
+                    <p style="margin:0;color:#713f12;font-size:13px;line-height:1.55;">
+                      If you need anything else, reply to this thread or use the contact form on ${APP_NAME} again.
                     </p>
                   </div>
                 </td>
               </tr>
-              
-              <!-- Footer -->
               <tr>
-                <td style="background-color: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
-                  <p style="margin: 0 0 10px 0; color: #718096; font-size: 14px;">
-                    <strong style="color: #2d3748;">BooyahX</strong> - Your Ultimate Gaming Experience
-                  </p>
-                  <p style="margin: 0 0 10px 0; color: #a0aec0; font-size: 12px;">
-                    Powered by <strong style="color: #667eea;">GamingHub Allday</strong>
-                  </p>
-                  <p style="margin: 15px 0 0 0; color: #cbd5e0; font-size: 11px;">
-                    © ${currentYear} BooyahX. All rights reserved.
-                  </p>
+                <td style="background-color:#f5f2ec;padding:24px 28px;text-align:center;border-top:1px solid #d4cec3;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-family:Georgia,'Times New Roman',Times,serif;font-weight:600;">${APP_NAME}</p>
+                  <p style="margin:0;color:#7a726a;font-size:11px;">© ${currentYear} ${APP_NAME}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
@@ -470,7 +382,7 @@ const generateInquiryReplyEmailTemplate = ({ name, originalSubject, originalMess
  * @returns {string} Email subject
  */
 const getInquiryReplyEmailSubject = (originalSubject) => {
-  return `Re: ${originalSubject} - BooyahX`;
+  return `Re: ${originalSubject} — ${APP_NAME}`;
 };
 
 /**
@@ -499,48 +411,49 @@ const generateRoomCredentialsEmailTemplate = ({ name, startTime, roomId, passwor
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f5f7fa; padding: 40px 20px;">
+    <body style="margin:0;padding:0;background-color:#e8e4dc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#e8e4dc;padding:48px 16px;">
         <tr>
           <td align="center">
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); overflow: hidden;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="560" style="max-width:560px;background-color:#fdfcfa;border:1px solid #d4cec3;">
               <tr>
-                <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Tournament is Live!</h1>
-                  <p style="margin: 10px 0 0 0; color: #ffffff; font-size: 16px; opacity: 0.95;">${lobbyLabel || 'Room credentials for your lobby'}</p>
+                <td style="background-color:#12100e;padding:32px 28px;text-align:center;border-bottom:3px solid #c9a227;">
+                  <p style="margin:0 0 10px 0;color:#c9a227;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;font-weight:600;">${APP_NAME}</p>
+                  <h1 style="margin:0;color:#faf8f5;font-size:22px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Tournament is live</h1>
+                  <p style="margin:14px 0 0 0;color:rgba(250,248,245,0.78);font-size:13px;line-height:1.5;">${lobbyLabel || 'Room credentials for your lobby'}</p>
                 </td>
               </tr>
               <tr>
-                <td style="padding: 40px 30px 20px 30px;">
-                  <h2 style="margin: 0 0 15px 0; color: #1a202c; font-size: 24px; font-weight: 600;">Hello ${name},</h2>
-                  <p style="margin: 0 0 20px 0; color: #4a5568; font-size: 16px; line-height: 1.6;">
-                    Your ${mode} ${subMode} tournament${lobbyLabel ? ` (${lobbyName})` : ''} at <strong>${startTime}</strong>${formattedDate ? ` on ${formattedDate}` : ''} is now live! Join the room using the credentials below.
+                <td style="padding:36px 32px 8px 32px;">
+                  <h2 style="margin:0 0 16px 0;color:#1a1816;font-size:20px;font-weight:600;font-family:Georgia,'Times New Roman',Times,serif;">Hello ${name},</h2>
+                  <p style="margin:0 0 24px 0;color:#494540;font-size:15px;line-height:1.65;">
+                    Your ${mode} ${subMode} tournament${lobbyLabel ? ` (${lobbyName})` : ''} at <strong>${startTime}</strong>${formattedDate ? ` on ${formattedDate}` : ''} is now live. Use the credentials below to join.
                   </p>
                 </td>
               </tr>
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background: linear-gradient(135deg, #f6f8fb 0%, #e9ecef 100%); border: 2px solid #e2e8f0; border-radius: 10px; padding: 25px 20px;">
-                    <p style="margin: 0 0 12px 0; color: #2d3748; font-size: 14px; font-weight: 600;">Room ID</p>
-                    <p style="margin: 0 0 20px 0; color: #667eea; font-size: 22px; font-weight: 700; font-family: 'Courier New', monospace; letter-spacing: 2px;">${roomId || '—'}</p>
-                    <p style="margin: 0 0 12px 0; color: #2d3748; font-size: 14px; font-weight: 600;">Password</p>
-                    <p style="margin: 0; color: #667eea; font-size: 22px; font-weight: 700; font-family: 'Courier New', monospace; letter-spacing: 2px;">${password || '—'}</p>
+                <td style="padding:0 32px 24px 32px;">
+                  <div style="background-color:#f5f2ec;border:1px solid #d4cec3;padding:22px 18px;">
+                    <p style="margin:0 0 8px 0;color:#1a1816;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Room ID</p>
+                    <p style="margin:0 0 20px 0;color:#1a1816;font-size:20px;font-weight:700;font-family:'Courier New',Courier,monospace;letter-spacing:0.08em;">${roomId || '—'}</p>
+                    <p style="margin:0 0 8px 0;color:#1a1816;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Password</p>
+                    <p style="margin:0;color:#1a1816;font-size:20px;font-weight:700;font-family:'Courier New',Courier,monospace;letter-spacing:0.08em;">${password || '—'}</p>
                   </div>
                 </td>
               </tr>
               <tr>
-                <td style="padding: 0 30px 30px 30px;">
-                  <div style="background-color: #fff5e6; border-left: 4px solid #ffa726; padding: 15px 20px; border-radius: 6px;">
-                    <p style="margin: 0; color: #e65100; font-size: 14px; line-height: 1.5;">
-                      <strong>⏰ Join now!</strong> The tournament has started. Open the game and join with the credentials above.
+                <td style="padding:0 32px 32px 32px;">
+                  <div style="background-color:#faf6ed;border-left:3px solid #9a7b0a;padding:14px 18px;">
+                    <p style="margin:0;color:#713f12;font-size:13px;line-height:1.55;">
+                      <strong>Join now:</strong> The match has started—open the game and enter the room with the details above.
                     </p>
                   </div>
                 </td>
               </tr>
               <tr>
-                <td style="background-color: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
-                  <p style="margin: 0 0 10px 0; color: #718096; font-size: 14px;"><strong style="color: #2d3748;">BooyahX</strong> - Your Ultimate Gaming Experience</p>
-                  <p style="margin: 0; color: #cbd5e0; font-size: 11px;">© ${currentYear} BooyahX. All rights reserved.</p>
+                <td style="background-color:#f5f2ec;padding:24px 28px;text-align:center;border-top:1px solid #d4cec3;">
+                  <p style="margin:0 0 6px 0;color:#1a1816;font-size:14px;font-family:Georgia,'Times New Roman',Times,serif;font-weight:600;">${APP_NAME}</p>
+                  <p style="margin:0;color:#7a726a;font-size:11px;">© ${currentYear} ${APP_NAME}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
@@ -553,7 +466,7 @@ const generateRoomCredentialsEmailTemplate = ({ name, startTime, roomId, passwor
 };
 
 const getRoomCredentialsEmailSubject = (startTime) => {
-  return `Tournament Live - Room ID & Password (${startTime}) - BooyahX`;
+  return `${APP_NAME} — Live: room ID & password (${startTime})`;
 };
 
 module.exports = {

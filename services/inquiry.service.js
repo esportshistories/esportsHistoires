@@ -29,7 +29,7 @@ const sendInquiryEmail = async (name, email, subject, message) => {
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     const senderEmail = process.env.EMAIL_FROM || 'no-reply@gaminghuballday.buzz';
-    const senderName = process.env.EMAIL_SENDER_NAME || 'BooyahX';
+    const senderName = process.env.EMAIL_SENDER_NAME || 'EsportsHistories';
     
     // Admin email - can be configured via environment variable
     const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_FROM || 'admin@gaminghuballday.buzz';
@@ -108,7 +108,7 @@ const sendInquiryReplyEmail = async (name, email, originalSubject, originalMessa
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     const senderEmail = process.env.EMAIL_FROM || 'no-reply@gaminghuballday.buzz';
-    const senderName = process.env.EMAIL_SENDER_NAME || 'BooyahX';
+    const senderName = process.env.EMAIL_SENDER_NAME || 'EsportsHistories';
 
     // Generate email template
     const htmlContent = generateInquiryReplyEmailTemplate({

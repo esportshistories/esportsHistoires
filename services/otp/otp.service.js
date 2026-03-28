@@ -67,7 +67,7 @@ const sendOTPEmail = async (email, otpCode, name = 'User', purpose = 'registrati
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     const senderEmail = process.env.EMAIL_FROM || 'no-reply@gaminghuballday.buzz';
-    const senderName = process.env.EMAIL_SENDER_NAME || 'BooyahX';
+    const senderName = process.env.EMAIL_SENDER_NAME || 'EsportsHistories';
 
     // Generate email template
     const htmlContent = generateOTPEmailTemplate({
@@ -411,7 +411,7 @@ const sendWelcomeEmail = async (email, name, password) => {
     const { generateWelcomeEmailTemplate, getWelcomeEmailSubject } = require('./email.templates');
 
     const senderEmail = process.env.EMAIL_FROM || 'no-reply@gaminghuballday.buzz';
-    const senderName = process.env.EMAIL_SENDER_NAME || 'BooyahX';
+    const senderName = process.env.EMAIL_SENDER_NAME || 'EsportsHistories';
 
     // Generate email template
     const htmlContent = generateWelcomeEmailTemplate({
