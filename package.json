@@ -1,0 +1,57 @@
+{
+  "name": "booyahx-backend",
+  "version": "1.0.0",
+  "description": "Backend API with MongoDB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development nodemon server.js",
+    "staging": "NODE_ENV=staging node server.js",
+    "production": "NODE_ENV=production node server.js",
+    "test": "NODE_ENV=test jest --testTimeout=10000",
+    "test:watch": "NODE_ENV=test jest --watch",
+    "test:coverage": "NODE_ENV=test jest --coverage",
+    "create-admin": "node scripts/create-admin.js"
+  },
+  "keywords": [
+    "game",
+    "backend",
+    "api"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.9.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "csrf": "^3.1.0",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.2.1",
+    "express-validator": "^7.3.1",
+    "firebase-admin": "^13.6.1",
+    "google-auth-library": "^10.5.0",
+    "helmet": "^8.0.0",
+    "imap": "^0.8.19",
+    "jsonwebtoken": "^9.0.2",
+    "mailparser": "^3.9.1",
+    "mongoose": "^9.0.0",
+    "multer": "1.4.5-lts.2",
+    "nodemailer": "^7.0.10",
+    "qrcode": "^1.5.3",
+    "razorpay": "^2.9.6",
+    "resend": "^6.5.2",
+    "socket.io": "^4.8.1",
+    "speakeasy": "^2.0.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "supertest": "^6.3.3"
+  }
+}

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: booyahx-backend
+    env: node
+    buildCommand: pnpm install
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromService:
+          type: web
+          name: booyahx-backend
+          property: port
+      - key: BASE_URL
+        value: https://api.gaminghuballday.buzz
+      - key: CORS_ORIGIN
+        value: https://gaminghuballday.buzz,https://www.gaminghuballday.buzz,https://booyahx.gaminghuballday.buzz
+    healthCheckPath: /health
+    domains:
+      - api.gaminghuballday.buzz
+

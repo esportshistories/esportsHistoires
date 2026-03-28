@@ -1,0 +1,57 @@
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: booyahx-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"  # Host port 27018 to avoid conflict with local MongoDB
+    environment:
+      MONGO_INITDB_DATABASE: booyahx
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - booyahx-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: booyahx-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.development
+    environment:
+      - NODE_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017/booyahx
+      - PORT=3000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - booyahx-network
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  booyahx-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
