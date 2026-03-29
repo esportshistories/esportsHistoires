@@ -62,7 +62,11 @@ const checkTournamentStatus = async (tournamentId = null) => {
  * - Periodic: Checks every minute to catch tournaments at start time (9:00)
  */
 const initializeScheduler = () => {
-  Logger.info('Scheduler initialized (hybrid: event-driven + periodic checks)', { autoVerify: PAYMENT.AUTO_VERIFY_ENABLED });
+  Logger.info('Scheduler initialized (hybrid: event-driven + periodic checks)', {
+    autoVerify: PAYMENT.AUTO_VERIFY_ENABLED,
+    bankEmailPolling: PAYMENT.ENABLE_BANK_STATEMENT_EMAIL_POLLING,
+    legacyUpiTopup: PAYMENT.ENABLE_LEGACY_UPI_TOPUP
+  });
   // Start periodic check every minute (60000 ms)
   // At start time (9:00): check room + min teams → live; else cancelled
   const periodicCheckInterval = setInterval(async () => {
@@ -101,91 +105,89 @@ const initializeScheduler = () => {
     }
   }, 60000); // Check every minute (60000 ms)
 
-  // Bank statement email parsing (every 2 minutes)
-  // This processes incoming bank statement emails and extracts transactions
-  const emailParsingInterval = setInterval(async () => {
-    try {
-      const mongoose = require('mongoose');
-      if (mongoose.connection.readyState !== 1) {
-        return; // Skip if DB not connected
-      }
+  // Bank statement email IMAP polling — opt-in (ENABLE_BANK_STATEMENT_EMAIL_POLLING=true)
+  if (PAYMENT.ENABLE_BANK_STATEMENT_EMAIL_POLLING) {
+    setInterval(async () => {
+      try {
+        const mongoose = require('mongoose');
+        if (mongoose.connection.readyState !== 1) {
+          return;
+        }
 
-      // Only run if email credentials are configured
-      if (process.env.BANK_STATEMENT_EMAIL && process.env.BANK_STATEMENT_EMAIL_PASSWORD) {
-        const result = await bankStatementEmailParser.processEmails({
-          maxEmails: 50,
-          markAsRead: true
-        });
+        if (process.env.BANK_STATEMENT_EMAIL && process.env.BANK_STATEMENT_EMAIL_PASSWORD) {
+          const result = await bankStatementEmailParser.processEmails({
+            maxEmails: 50,
+            markAsRead: true
+          });
 
-        if (result.processed > 0 || result.transactions > 0) {
-          Logger.info(`📧 Email parsing: Processed ${result.processed} emails, extracted ${result.transactions} transactions`);
-          
-          // CRITICAL: Trigger matching immediately after successful email parsing
-          // This ensures "thik ussi time" verification as requested by user
-          if (result.transactions > 0 && PAYMENT.AUTO_VERIFY_ENABLED) {
-            const matchResult = await paymentVerificationService.processBankStatementQueue();
-            if (matchResult.verified > 0) {
-              Logger.info(`✅ Instant verification: Verified ${matchResult.verified} payments from new emails`);
+          if (result.processed > 0 || result.transactions > 0) {
+            Logger.info(`📧 Email parsing: Processed ${result.processed} emails, extracted ${result.transactions} transactions`);
+
+            if (result.transactions > 0 && PAYMENT.AUTO_VERIFY_ENABLED) {
+              const matchResult = await paymentVerificationService.processBankStatementQueue();
+              if (matchResult.verified > 0) {
+                Logger.info(`✅ Instant verification: Verified ${matchResult.verified} payments from new emails`);
+              }
             }
           }
         }
+      } catch (error) {
+        Logger.error('❌ Scheduler: Error in email parsing:', error);
       }
-    } catch (error) {
-      Logger.error('❌ Scheduler: Error in email parsing:', error);
-      // Don't throw - let scheduler continue
-    }
-  }, PAYMENT.EMAIL_PARSING_INTERVAL * 60 * 1000); // Check every X minutes (default: 2)
+    }, PAYMENT.EMAIL_PARSING_INTERVAL * 60 * 1000);
+  } else {
+    Logger.info('Scheduler: bank statement email IMAP polling is disabled (set ENABLE_BANK_STATEMENT_EMAIL_POLLING=true to enable)');
+  }
 
-  // Payment verification and matching (every 5 minutes)
-  // This matches pending transactions with bank statement transactions and auto-verifies
-  const paymentCheckInterval = setInterval(async () => {
-    try {
-      const mongoose = require('mongoose');
-      if (mongoose.connection.readyState !== 1) {
-        return; // Skip if DB not connected
-      }
+  // UTR / bank-statement queue matching (every 5 min) — only if legacy UPI or email polling is in use
+  if (
+    PAYMENT.AUTO_VERIFY_ENABLED &&
+    (PAYMENT.ENABLE_LEGACY_UPI_TOPUP || PAYMENT.ENABLE_BANK_STATEMENT_EMAIL_POLLING)
+  ) {
+    setInterval(async () => {
+      try {
+        const mongoose = require('mongoose');
+        if (mongoose.connection.readyState !== 1) {
+          return;
+        }
 
-      // Only run if auto-verification is enabled
-      // UTR cron: current day only, UTR from last 30 min only, max 5 checks per UTR then admin manual
-      if (PAYMENT.AUTO_VERIFY_ENABLED) {
-        // Match and verify pending transactions with bank statements (cron-eligible only)
         const matchResult = await paymentVerificationService.processBankStatementQueue({ fromCron: true });
 
         if (matchResult.matched > 0 || matchResult.verified > 0) {
           Logger.info(`✅ Payment verification: Matched ${matchResult.matched} transactions, verified ${matchResult.verified} payments`);
         }
 
-        // Also check for pending transactions that can be auto-verified (cron-eligible only)
         const verifyResult = await paymentVerificationService.autoVerifyPending({ forCron: true });
 
         if (verifyResult.checked > 0) {
           Logger.info(`📊 Payment check: ${verifyResult.checked} pending transactions with UTR found, ${verifyResult.verified} verified`);
         }
+      } catch (error) {
+        Logger.error('❌ Scheduler: Error in payment verification check:', error);
       }
-    } catch (error) {
-      Logger.error('❌ Scheduler: Error in payment verification check:', error);
-      // Don't throw - let scheduler continue
-    }
-  }, 5 * 60 * 1000); // Check every 5 minutes
+    }, 5 * 60 * 1000);
+  } else {
+    Logger.info('Scheduler: UTR/bank-queue periodic verification is disabled (enable ENABLE_LEGACY_UPI_TOPUP and/or ENABLE_BANK_STATEMENT_EMAIL_POLLING)');
+  }
 
-  // QR code expiration (every 10 minutes)
-  // This expires old QR codes that are past their expiration time
-  const qrExpirationInterval = setInterval(async () => {
-    try {
-      const mongoose = require('mongoose');
-      if (mongoose.connection.readyState !== 1) {
-        return; // Skip if DB not connected
-      }
+  // Expire stale manual UPI / QR requests — only when that flow is enabled
+  if (PAYMENT.ENABLE_LEGACY_UPI_TOPUP) {
+    setInterval(async () => {
+      try {
+        const mongoose = require('mongoose');
+        if (mongoose.connection.readyState !== 1) {
+          return;
+        }
 
-      const expiredCount = await paymentService.expireOldQRCodes();
-      if (expiredCount > 0) {
-        Logger.info(`⏰ QR expiration: Expired ${expiredCount} old QR codes`);
+        const expiredCount = await paymentService.expireOldQRCodes();
+        if (expiredCount > 0) {
+          Logger.info(`⏰ QR expiration: Expired ${expiredCount} old QR codes`);
+        }
+      } catch (error) {
+        Logger.error('❌ Scheduler: Error in QR code expiration:', error);
       }
-    } catch (error) {
-      Logger.error('❌ Scheduler: Error in QR code expiration:', error);
-      // Don't throw - let scheduler continue
-    }
-  }, 10 * 60 * 1000); // Check every 10 minutes
+    }, 10 * 60 * 1000);
+  }
 
   // Support ticket auto-close check (every hour)
   // This checks for tickets where admin/host replied and user hasn't replied within 24 hours

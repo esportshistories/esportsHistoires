@@ -686,15 +686,15 @@ const joinTournament = asyncHandler(async (req, res) => {
     teamData = null;
   }
 
-  // ✅ ATOMIC TRANSACTION: Deduct balance AND join tournament in single transaction
-  // If either operation fails, both are rolled back automatically
-  const session = await mongoose.startSession();
-  
+  // Atomic when MongoDB is a replica set; on standalone dev, same steps run without a transaction.
+  const { runWithTransaction } = require('../utils/runWithTransaction');
+
   let resultTournament;
   try {
-    await session.withTransaction(async () => {
-      // 1. Deduct wallet balance
-      const w = await Wallet.findOne({ userId }).session(session);
+    await runWithTransaction(async (session) => {
+      let wq = Wallet.findOne({ userId });
+      if (session) wq = wq.session(session);
+      const w = await wq;
       if (!w) {
         throw new Error('Wallet not found');
       }
@@ -702,18 +702,21 @@ const joinTournament = asyncHandler(async (req, res) => {
         throw new Error('Insufficient balance');
       }
       w.balanceINR -= tournament.entryFee;
-      await w.save({ session });
-      
-      // 2. Create wallet history
-      await WalletHistory.create([{
-        userId,
-        type: 'join',
-        amountINR: tournament.entryFee,
-        description: `Joined tournament: ${tournament.game} ${tournament.mode} ${tournament.subMode}`,
-        tournamentId
-      }], { session });
-      
-      // 3. Join tournament
+      await w.save(session ? { session } : {});
+
+      await WalletHistory.create(
+        [
+          {
+            userId,
+            type: 'join',
+            amountINR: tournament.entryFee,
+            description: `Joined tournament: ${tournament.game} ${tournament.mode} ${tournament.subMode}`,
+            tournamentId
+          }
+        ],
+        session ? { session } : {}
+      );
+
       const updateQuery = {
         $addToSet: { participants: userId },
         $set: { updatedAt: now }
@@ -731,13 +734,15 @@ const joinTournament = asyncHandler(async (req, res) => {
         };
       }
 
-      // Allow join until last second before start (lockTime is start time) – slot must be available
+      const findOpts = { returnDocument: 'after', runValidators: true };
+      if (session) findOpts.session = session;
+
       resultTournament = await Tournament.findOneAndUpdate(
         {
           _id: tournamentId,
           status: { $in: ['upcoming', 'locked'] },
           participants: { $ne: userId },
-          $expr: { 
+          $expr: {
             $and: [
               { $lt: [{ $size: { $ifNull: ['$participants', []] } }, '$maxPlayers'] },
               { $gt: ['$lockTime', now] }
@@ -745,15 +750,13 @@ const joinTournament = asyncHandler(async (req, res) => {
           }
         },
         updateQuery,
-        { returnDocument: 'after', runValidators: true, session }
+        findOpts
       );
 
       if (!resultTournament) {
         throw new Error('Tournament is locked, full, or cannot be joined');
       }
     });
-    
-    await session.endSession();
     
     // Prize pool is automatically updated by Tournament pre-save hook (no need for explicit call)
     
@@ -797,7 +800,6 @@ const joinTournament = asyncHandler(async (req, res) => {
     });
     
   } catch (error) {
-    await session.endSession();
     Logger.error('Tournament join failed', { error: error.message, userId, tournamentId });
     return res.badRequest(error.message || 'Failed to join tournament. Please try again.');
   }

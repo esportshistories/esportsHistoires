@@ -340,6 +340,49 @@
 
 /**
  * @swagger
+ * /api/payment/withdraw:
+ *   post:
+ *     summary: Withdraw wallet balance (alias — same as POST /api/wallet/withdraw)
+ *     description: |
+ *       **Identical** to `POST /api/wallet/withdraw` — debits wallet, creates **pending** withdrawal; admin pays manually.
+ *       Body: `amountINR` or **`amount`**, optional `upiId` or **`vpa`** / **`upi`**, optional `description`. Bearer auth required.
+ *       Use this path if your app groups money APIs under `/api/payment/*`.
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amountINR]
+ *             properties:
+ *               amountINR:
+ *                 type: number
+ *                 minimum: 0.01
+ *               amount:
+ *                 type: number
+ *                 description: Alias for amountINR
+ *               upiId:
+ *                 type: string
+ *                 example: user@oksbi
+ *               vpa:
+ *                 type: string
+ *                 description: Alias for upiId
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Same as /api/wallet/withdraw; `data.mode` = pending_admin
+ *       400:
+ *         description: Validation / limits / missing UPI
+ *       401:
+ *         description: Unauthorized
+ */
+
+/**
+ * @swagger
  * /api/payment/razorpay/order:
  *   post:
  *     summary: Start Razorpay top-up (create order)

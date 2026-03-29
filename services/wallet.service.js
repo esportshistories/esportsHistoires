@@ -9,15 +9,12 @@ const WalletHistory = require('../models/WalletHistory.model');
 const User = require('../models/User.model');
 const UserPaymentInfo = require('../models/UserPaymentInfo.model');
 const { roundInr } = require('../utils/inr');
-const { HTTP_STATUS } = require('../constants');
 const Logger = require('../utils/logger');
 const { runWithTransaction } = require('../utils/runWithTransaction');
+const sessOpt = (session) => (session ? { session } : {});
+const withSession = (query, session) => (session ? query.session(session) : query);
 const { transformTransactionStatus } = require('../utils/transaction.helper');
 const { broadcastWalletUpdate, broadcastTransactionUpdate, broadcastWalletHistoryUpdate } = require('./websocket.service');
-
-/** Wagering limit: user can withdraw only this percentage of total deposits (default 50%) */
-const WITHDRAWAL_WAGERING_PERCENT = Math.min(100, Math.max(0, parseInt(process.env.WITHDRAWAL_WAGERING_PERCENT, 10) || 50));
-
 /** Daily withdrawal limit: max count per day (default 3) */
 const WITHDRAWAL_DAILY_MAX_COUNT = Math.max(1, parseInt(process.env.WITHDRAWAL_DAILY_MAX_COUNT, 10) || 3);
 
@@ -104,8 +101,8 @@ const addBalance = async (userId, amountINR, description, status = 'success', ad
     const { wallet, transaction } = await runWithTransaction(async (session) => {
       const w = await getOrCreateWallet(userId, session);
       w.balanceINR = roundInr((w.balanceINR || 0) + amt);
-      await w.save({ session });
-      const t = await WalletHistory.create([{ userId, type: 'topup', amountINR: amt, description, status: 'success', addedBy }], { session });
+      await w.save(sessOpt(session));
+      const t = await WalletHistory.create([{ userId, type: 'topup', amountINR: amt, description, status: 'success', addedBy }], sessOpt(session));
       return { wallet: w, transaction: Array.isArray(t) ? t[0] : t };
     });
     // Emit balance update so user UI updates immediately without refresh (topup/admin add)
@@ -137,8 +134,8 @@ const deductBalance = async (userId, amountINR, description, tournamentId = null
     const w = await getOrCreateWallet(userId, session);
     if (w.balanceINR < amt) throw new Error('Insufficient balance');
     w.balanceINR = roundInr(w.balanceINR - amt);
-    await w.save({ session });
-    const t = await WalletHistory.create([{ userId, type: 'join', amountINR: amt, description, tournamentId }], { session });
+    await w.save(sessOpt(session));
+    const t = await WalletHistory.create([{ userId, type: 'join', amountINR: amt, description, tournamentId }], sessOpt(session));
     return { wallet: w, transaction: Array.isArray(t) ? t[0] : t };
   });
   broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'balance');
@@ -177,8 +174,8 @@ const addReward = async (userId, rewardGC, description, tournamentId, metadata =
   const { wallet, transaction } = await runWithTransaction(async (session) => {
     const w = await getOrCreateWallet(userId, session);
     w.balanceINR = roundInr((w.balanceINR || 0) + rAmt);
-    await w.save({ session });
-    const t = await WalletHistory.create([rewardData], { session });
+    await w.save(sessOpt(session));
+    const t = await WalletHistory.create([rewardData], sessOpt(session));
     return { wallet: w, transaction: Array.isArray(t) ? t[0] : t };
   });
   broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'history');
@@ -211,10 +208,10 @@ const refundEntryFee = async (userId, amountINR, description, tournamentId) => {
   const { wallet, transaction } = await runWithTransaction(async (session) => {
     const w = await getOrCreateWallet(userId, session);
     w.balanceINR = roundInr((w.balanceINR || 0) + amount);
-    await w.save({ session });
+    await w.save(sessOpt(session));
     const t = await WalletHistory.create(
       [{ userId, type: 'refund', amountINR: amount, description, tournamentId }],
-      { session }
+      sessOpt(session)
     );
     return { wallet: w, transaction: Array.isArray(t) ? t[0] : t };
   });
@@ -309,7 +306,7 @@ const getTodayWithdrawalStats = async (userId) => {
 };
 
 /**
- * Get maximum amount user is allowed to withdraw using consolidated aggregation
+ * Max withdrawable now: wallet balance capped by daily limits (and host per-request max).
  * @param {string} userId - User ID
  * @param {boolean} isHost - If true, apply host withdrawal limits (1 per day, min 40 max 500 per request)
  * @returns {Promise<Object>}
@@ -356,12 +353,10 @@ const getMaxWithdrawable = async (userId, isHost = false) => {
   const todayTotalINR = stats[0].todayStats[0]?.totalINR || 0;
 
   const balanceINR = wallet.balanceINR || 0;
-  const limitFromDeposits = (totalDeposits * WITHDRAWAL_WAGERING_PERCENT) / 100;
-  const remainingWagering = Math.max(0, limitFromDeposits - totalWithdrawn);
   const remainingDailyINR = Math.max(0, dailyMaxINR - todayTotalINR);
   const canWithdrawMoreToday = todayCount < dailyMaxCount;
-  
-  let maxWithdrawableINR = Math.min(balanceINR, remainingWagering);
+
+  let maxWithdrawableINR = balanceINR;
   if (canWithdrawMoreToday) {
     maxWithdrawableINR = Math.min(maxWithdrawableINR, remainingDailyINR);
   } else {
@@ -389,14 +384,9 @@ const getMaxWithdrawable = async (userId, isHost = false) => {
 };
 
 /**
- * Withdraw balance (user cash-out). Enforces wagering limit: user can only withdraw up to
- * WITHDRAWAL_WAGERING_PERCENT of their total deposits (minus already withdrawn).
- * @param {string} userId - User ID
- * @param {number} amountINR - Amount to withdraw
- * @param {string} description - Transaction description (e.g. payout reference)
- * @returns {Promise<Object>} Updated wallet and transaction
+ * Withdraw: debit wallet and create a **pending** withdrawal for admin to pay manually (UPI/bank), then PATCH success/fail.
  */
-const withdrawBalance = async (userId, amountINR, description) => {
+const withdrawBalance = async (userId, amountINR, description, options = {}) => {
   const amt = roundInr(amountINR);
   if (!Number.isFinite(amt) || amt <= 0) {
     throw new Error('Amount must be greater than 0');
@@ -414,7 +404,7 @@ const withdrawBalance = async (userId, amountINR, description) => {
     }
   }
 
-  const { maxWithdrawableINR, balanceINR, dailyLimit } = await getMaxWithdrawable(userId, isHost);
+  const { balanceINR, dailyLimit } = await getMaxWithdrawable(userId, isHost);
   if (balanceINR < amt) {
     throw new Error('Insufficient balance');
   }
@@ -430,31 +420,41 @@ const withdrawBalance = async (userId, amountINR, description) => {
       `Daily withdrawal limit exceeded. You can withdraw at most ₹${dailyMaxCap} per day. Already withdrawn ₹${dailyLimit.totalINR} today.`
     );
   }
-  if (amt > maxWithdrawableINR) {
+
+  const paymentInfo = await UserPaymentInfo.findOne({ userId }).lean();
+  const fromBody = (options.upiId != null && String(options.upiId).trim() !== '')
+    ? String(options.upiId).trim()
+    : null;
+  const fromProfile = (paymentInfo?.upiId && String(paymentInfo.upiId).trim()) || null;
+  const upiId = fromBody || fromProfile;
+
+  if (!upiId) {
     throw new Error(
-      `Withdrawal limit exceeded. You can withdraw at most ₹${maxWithdrawableINR} (${WITHDRAWAL_WAGERING_PERCENT}% of total deposits minus already withdrawn).`
+      'Send upiId or vpa in the body, or save UPI on your profile (name@bank).'
     );
   }
-
-  // Fetch user's UPI ID from profile so admin knows where to send the payment
-  const paymentInfo = await UserPaymentInfo.findOne({ userId }).lean();
-  const upiId = paymentInfo?.upiId || null;
 
   const { wallet, transaction } = await runWithTransaction(async (session) => {
     const w = await getOrCreateWallet(userId, session);
     if (w.balanceINR < amt) throw new Error('Insufficient balance');
     w.balanceINR = roundInr(w.balanceINR - amt);
-    await w.save({ session });
+    await w.save(sessOpt(session));
     const t = await WalletHistory.create(
       [{ userId, type: 'withdrawal', amountINR: amt, description, status: 'pending', upiId }],
-      { session }
+      sessOpt(session)
     );
     return { wallet: w, transaction: Array.isArray(t) ? t[0] : t };
   });
   broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'history');
-  return { wallet, transaction };
-};
 
+  const walletFinal = await getOrCreateWallet(userId);
+  const txFinal = await WalletHistory.findById(transaction._id);
+  return {
+    wallet: walletFinal,
+    transaction: txFinal,
+    mode: 'pending_admin'
+  };
+};
 
 /**
  * Get wallet history for user – tournament-related only (join, reward, refund).
@@ -680,7 +680,7 @@ const updateTransactionStatus = async (transactionId, status, verifiedBy = 'admi
   const previousVerifiedBy = existingTx.verifiedBy;
 
   await runWithTransaction(async (session) => {
-    const transaction = await WalletHistory.findById(transactionId).session(session);
+    const transaction = await withSession(WalletHistory.findById(transactionId), session);
     if (!transaction) throw new Error('Transaction not found');
 
     const wallet = await getOrCreateWallet(userId, session);
@@ -690,14 +690,14 @@ const updateTransactionStatus = async (transactionId, status, verifiedBy = 'admi
       const lineAmt = roundInr(transaction.amountINR);
       if (wallet.balanceINR >= lineAmt) {
         wallet.balanceINR = roundInr(wallet.balanceINR - lineAmt);
-        await wallet.save({ session });
+        await wallet.save(sessOpt(session));
       } else {
         Logger.warn('Insufficient balance to deduct for transaction', { transactionId });
       }
     } else if (previousStatus === 'fail' && status === 'success') {
       if ((previousVerifiedBy !== 'admin' && previousVerifiedBy !== 'system') || !transaction.paymentVerified) {
         wallet.balanceINR = roundInr((wallet.balanceINR || 0) + roundInr(transaction.amountINR));
-        await wallet.save({ session });
+        await wallet.save(sessOpt(session));
       } else {
         Logger.warn('Transaction was already verified, skipping balance addition', { transactionId });
       }
@@ -713,7 +713,7 @@ const updateTransactionStatus = async (transactionId, status, verifiedBy = 'admi
       transaction.verifiedBy = verifiedBy;
       transaction.verifiedAt = new Date();
     }
-    await transaction.save({ session });
+    await transaction.save(sessOpt(session));
   });
 
   // After commit: reload, broadcast, return
@@ -961,12 +961,8 @@ const getWithdrawalRequests = async (limit = 50, skip = 0, status = null, email 
 
 
 /**
- * Update withdrawal request status (Admin only)
- * success = admin has made manual payment to user; fail = reject and refund amount to user wallet.
- * @param {string} transactionId - WalletHistory (withdrawal) transaction ID
- * @param {string} status - New status: 'success' (paid) or 'fail' (rejected, refund)
- * @param {string} verifiedBy - Who verified: 'admin' or 'system', default: 'admin'
- * @returns {Promise<Object>} Updated transaction and wallet
+ * Admin: **pending** withdrawal only (wallet already debited on user request).
+ * success = you paid the user manually; fail = reject and refund wallet.
  */
 const updateWithdrawalStatus = async (transactionId, status, verifiedBy = 'admin') => {
   if (!['success', 'fail'].includes(status)) {
@@ -983,18 +979,20 @@ const updateWithdrawalStatus = async (transactionId, status, verifiedBy = 'admin
   const amountINR = existing.amountINR;
 
   await runWithTransaction(async (session) => {
-    const t = await WalletHistory.findById(transactionId).session(session);
+    const t = await withSession(WalletHistory.findById(transactionId), session);
     if (!t || t.status !== 'pending') throw new Error('Withdrawal no longer pending');
     if (status === 'fail') {
       const w = await getOrCreateWallet(userId, session);
       w.balanceINR = roundInr((w.balanceINR || 0) + amountINR);
-      await w.save({ session });
+      await w.save(sessOpt(session));
     }
     t.status = status;
     t.verifiedBy = verifiedBy;
     t.verifiedAt = new Date();
-    if (status === 'success') t.paymentVerified = true;
-    await t.save({ session });
+    if (status === 'success') {
+      t.paymentVerified = true;
+    }
+    await t.save(sessOpt(session));
   });
 
   const transaction = await WalletHistory.findById(transactionId).lean();
@@ -1023,17 +1021,17 @@ const cancelWithdraw = async (userId, transactionId) => {
   const amountINR = existing.amountINR;
 
   await runWithTransaction(async (session) => {
-    const t = await WalletHistory.findById(transactionId).session(session);
+    const t = await withSession(WalletHistory.findById(transactionId), session);
     if (!t || t.status !== 'pending') throw new Error('Withdrawal is no longer pending');
     // Refund amount back to wallet
     const w = await getOrCreateWallet(userId, session);
     w.balanceINR = roundInr((w.balanceINR || 0) + amountINR);
-    await w.save({ session });
+    await w.save(sessOpt(session));
     // Mark as cancelled
     t.status = 'cancelled';
     t.verifiedBy = 'user';
     t.verifiedAt = new Date();
-    await t.save({ session });
+    await t.save(sessOpt(session));
   });
 
   const transaction = await WalletHistory.findById(transactionId).lean();
@@ -1087,8 +1085,8 @@ const addBalanceBulk = async (userIds, amountINR, description) => {
 
   try {
     await runWithTransaction(async (session) => {
-      await WalletHistory.insertMany(historyData, { session });
-      await Wallet.bulkWrite(walletOperations, { session });
+      await WalletHistory.insertMany(historyData, sessOpt(session));
+      await Wallet.bulkWrite(walletOperations, sessOpt(session));
     });
 
     // After commit: prepare results and broadcast (WebSocket still needs individual emitters)
@@ -1134,6 +1132,5 @@ module.exports = {
   getWithdrawalRequests,
   updateWithdrawalStatus,
   cancelWithdraw,
-  updateTransactionStatus,
-  WITHDRAWAL_WAGERING_PERCENT
+  updateTransactionStatus
 };

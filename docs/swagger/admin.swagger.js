@@ -2009,7 +2009,7 @@
  * /api/admin/withdrawals:
  *   get:
  *     summary: List withdrawal requests (Admin only)
- *     description: Lists user withdrawal requests with user info and current balance so admin can verify user had sufficient balance. Admin does manual payment to user, then updates status to success.
+ *     description: Lists withdrawal rows. User `POST /api/wallet/withdraw` creates **pending** (wallet debited); admin pays manually then PATCH **success** or **fail** (refund).
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -2031,7 +2031,7 @@
  *         schema:
  *           type: string
  *           enum: [pending, success, fail]
- *         description: Filter by withdrawal status (pending = awaiting admin payment)
+ *         description: Filter by status (`pending` = awaiting admin payout)
  *       - in: query
  *         name: email
  *         schema:
@@ -2109,7 +2109,8 @@
  * /api/admin/withdrawals/{transactionId}/status:
  *   patch:
  *     summary: Update withdrawal status (Admin only)
- *     description: After admin does manual payment to user, mark as success. To reject and refund user balance, mark as fail.
+ *     description: |
+ *       For **pending** withdrawals only (wallet already debited on user request). **success:** you paid the user manually; marks row paid. **fail:** refund wallet.
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -2133,7 +2134,6 @@
  *                 type: string
  *                 enum: [success, fail]
  *                 example: success
- *                 description: success = admin paid user manually; fail = reject and refund amount to user wallet
  *     responses:
  *       200:
  *         description: Withdrawal status updated

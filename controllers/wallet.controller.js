@@ -10,8 +10,7 @@ const User = require('../models/User.model');
 const { transformTransactionStatuses } = require('../utils/transaction.helper');
 
 /**
- * Get wallet balance and withdrawal limit (wagering: user can withdraw only % of total deposits)
- * For host role: daily 1 withdrawal, min ₹40 max ₹500 per request (same numeric env limits).
+ * Get wallet balance, max withdrawable (balance + daily caps; host per-request limits), and deposit/withdraw totals.
  * GET /api/wallet/balance
  */
 const getBalance = asyncHandler(async (req, res) => {
@@ -45,33 +44,61 @@ const getBalance = asyncHandler(async (req, res) => {
 });
 
 /**
- * Request withdrawal (cash-out). Enforces wagering limit: user can only withdraw up to
- * WITHDRAWAL_WAGERING_PERCENT (default 50%) of total deposits minus amount already withdrawn.
+ * Request withdrawal (cash-out). Debits wallet and creates **pending** row; admin pays manually then PATCH success/fail.
+ * Optional body `upiId` overrides profile payout UPI for this request.
  * POST /api/wallet/withdraw
  */
 const requestWithdraw = asyncHandler(async (req, res) => {
   const userId = req.userId;
-  const { amountINR, description } = req.body;
+  const { amountINR, description, upiId } = req.body;
 
   if (!amountINR || amountINR <= 0) {
     return res.badRequest('amountINR is required and must be greater than 0');
   }
 
   const desc = (description && typeof description === 'string' && description.trim()) ? description.trim() : 'Withdrawal request';
-  const { wallet, transaction } = await walletService.withdrawBalance(userId, amountINR, desc);
 
-  res.success(HTTP_STATUS.OK, 'Withdrawal request submitted. Pending admin payment.', {
-    balanceINR: wallet.balanceINR,
-    updatedAt: wallet.updatedAt,
-    transaction: {
-      _id: transaction._id,
-      type: transaction.type,
-      amountINR: transaction.amountINR,
-      description: transaction.description,
-      status: transaction.status || 'pending',
-      createdAt: transaction.createdAt
+  try {
+    const result = await walletService.withdrawBalance(userId, amountINR, desc, {
+      upiId: upiId != null ? String(upiId).trim() : undefined
+    });
+
+    res.success(HTTP_STATUS.OK, 'Withdrawal request submitted. An admin will process it.', {
+      balanceINR: result.wallet.balanceINR,
+      updatedAt: result.wallet.updatedAt,
+      mode: result.mode,
+      transaction: {
+        _id: result.transaction._id,
+        type: result.transaction.type,
+        amountINR: result.transaction.amountINR,
+        description: result.transaction.description,
+        status: result.transaction.status || 'pending',
+        upiId: result.transaction.upiId || undefined,
+        bankReference: result.transaction.bankReference || undefined,
+        createdAt: result.transaction.createdAt
+      }
+    });
+  } catch (error) {
+    if (error.message && error.message.includes('Amount must be greater than 0')) {
+      return res.badRequest(error.message);
     }
-  });
+    if (error.message && error.message.includes('Insufficient balance')) {
+      return res.badRequest(error.message);
+    }
+    if (error.message && error.message.includes('Daily withdrawal')) {
+      return res.badRequest(error.message);
+    }
+    if (error.message && (error.message.includes('UPI ID is required') || error.message.includes('not available'))) {
+      return res.badRequest(error.message);
+    }
+    if (
+      error.message &&
+      (error.message.includes('Minimum withdrawal') || error.message.includes('Maximum withdrawal'))
+    ) {
+      return res.badRequest(error.message);
+    }
+    throw error;
+  }
 });
 
 /**

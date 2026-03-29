@@ -8,6 +8,7 @@ const { body } = require('express-validator');
 const { validate } = require('../middleware/validation.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
 const { isAdmin } = require('../middleware/admin.middleware');
+const { normalizeWithdrawBody } = require('../middleware/normalizeWithdraw.middleware');
 const {
   getBalance,
   getHistory,
@@ -41,15 +42,21 @@ router.get(
 router.post(
   '/withdraw',
   authenticate,
+  normalizeWithdrawBody,
   [
     body('amountINR')
       .isFloat({ min: 0.01 })
-      .withMessage('amountINR must be a positive number'),
+      .withMessage('amountINR or amount must be a positive number'),
     body('description')
       .optional()
       .trim()
       .isString()
-      .withMessage('description must be a string')
+      .withMessage('description must be a string'),
+    body('upiId')
+      .optional()
+      .trim()
+      .matches(/^[\w.-]+@[\w.-]+$/)
+      .withMessage('upiId / vpa / upi must be a valid UPI ID (e.g. name@bank)')
   ],
   validate,
   requestWithdraw

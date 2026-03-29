@@ -278,7 +278,8 @@ const userSchema = new mongoose.Schema({
   fcmToken: {
     type: String,
     trim: true
-  }
+  },
+
 }, {
   timestamps: true, // Automatically manage createdAt and updatedAt
   collection: 'users' // Explicit collection name

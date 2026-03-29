@@ -24,6 +24,12 @@ const PAYER_UPI_PATTERN = /^[\w.-]+@[\w]+$/;
  * @param {{ forceIncludeQr?: boolean }} opts - If forceIncludeQr is boolean, overrides body includeQr
  */
 const initiateUpiDepositFlow = async (req, res, opts = {}) => {
+  if (!PAYMENT.ENABLE_LEGACY_UPI_TOPUP) {
+    return res.forbidden(
+      'Manual UPI and QR top-up is disabled. Use Razorpay: POST /api/payment/razorpay/order.'
+    );
+  }
+
   const userId = req.userId;
   const { amountINR: rawAmountInr, fixedAmount = true, description, includeQr: includeQrRaw, payerUPI } =
     req.body;

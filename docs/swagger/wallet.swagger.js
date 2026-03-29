@@ -5,8 +5,8 @@
  *     summary: Get wallet balance and withdrawal limits
  *     description: |
  *       Retrieve wallet balance and withdrawal limits:
- *       - **Wagering:** Max withdrawable = 50% of total deposits minus already withdrawn (user must "play" 50% in games)
- *       - **Daily:** Max 3 withdrawals per day, max 500 GC per day (IST)
+ *       - **Max withdrawable:** Up to full balance, capped by daily withdrawal limits (and host per-request max).
+ *       - **Daily:** Max 3 withdrawals per day, max 500 GC per day (IST) — configurable via env.
  *     tags: [Wallet]
  *     security:
  *       - bearerAuth: []
@@ -36,9 +36,9 @@
  *                     updatedAt:
  *                       type: string
  *                       format: date-time
- *                     maxWithdrawableGC:
+ *                     maxWithdrawableINR:
  *                       type: number
- *                       description: Maximum amount user can withdraw (wagering limit - 50% of total deposits minus already withdrawn)
+ *                       description: Maximum amount user can withdraw right now (balance capped by daily limits; host role also capped per request)
  *                       example: 250
  *                     totalDepositsGC:
  *                       type: number
@@ -335,11 +335,11 @@
  *   post:
  *     summary: Cancel a pending withdrawal request
  *     description: |
- *       User can cancel their own pending withdrawal request. The withdrawn amount is immediately refunded back to their wallet.
+ *       Cancels a **`pending`** withdrawal and refunds the wallet (user changed mind before admin paid).
  *       
  *       **Rules:**
  *       - Only `pending` withdrawals can be cancelled
- *       - Once admin marks it `success` or `fail`, it **cannot** be cancelled
+ *       - Once status is `success`, `fail`, or `cancelled`, it **cannot** be cancelled
  *       - Only the owner of the withdrawal can cancel it
  *       - Refund is instant (wallet balance restored via DB transaction)
  *       - After cancellation, `wallet:balance-updated` and `wallet:history-updated` socket events are emitted
@@ -600,10 +600,10 @@
  *   post:
  *     summary: Request withdrawal (cash-out)
  *     description: |
- *       User requests withdrawal. Amount deducted immediately; status pending until admin marks as success.
- *       **Limits:**
- *       - Wagering: Max 50% of total deposits (minus already withdrawn) - user must play 50% in games
- *       - Daily: Max 3 withdrawals per day, max 500 GC per day (IST)
+ *       **Same endpoint behaviour as** `POST /api/payment/withdraw` (alias for clients that mount money APIs under `/api/payment`).
+ *       Body aliases: **`amount`** → `amountINR`; **`vpa`** / **`upi`** → `upiId`.
+ *       Debits wallet and creates **`pending`** withdrawal; admin pays user manually then `PATCH /api/admin/withdrawals/:id/status` (**success** / **fail**).
+ *       **Limits:** Balance, daily count/amount (IST), host min/max per request.
  *     tags: [Wallet]
  *     security:
  *       - bearerAuth: []
@@ -620,14 +620,25 @@
  *                 type: number
  *                 minimum: 0.01
  *                 example: 100
- *                 description: Amount to withdraw (GC)
+ *                 description: Amount to withdraw (GC). Alias field **`amount`** also accepted.
+ *               amount:
+ *                 type: number
+ *                 minimum: 0.01
+ *                 description: Alias for amountINR
  *               description:
  *                 type: string
  *                 example: UPI payout
  *                 description: Optional note for payout reference
+ *               upiId:
+ *                 type: string
+ *                 example: user@oksbi
+ *                 description: Optional payout VPA (aliases **`vpa`**, **`upi`**)
+ *               vpa:
+ *                 type: string
+ *                 description: Alias for upiId
  *     responses:
  *       200:
- *         description: Withdrawal request submitted (pending admin payment)
+ *         description: Request queued (`data.mode` = pending_admin, `transaction.status` = pending)
  *         content:
  *           application/json:
  *             schema:
@@ -645,6 +656,9 @@
  *                 data:
  *                   type: object
  *                   properties:
+ *                     mode:
+ *                       type: string
+ *                       enum: [pending_admin]
  *                     balanceINR:
  *                       type: number
  *                     updatedAt:
@@ -662,15 +676,18 @@
  *                           type: number
  *                         description:
  *                           type: string
+ *                         status:
+ *                           type: string
+ *                         upiId:
+ *                           type: string
+ *                         bankReference:
+ *                           type: string
  *                         createdAt:
  *                           type: string
  *                           format: date-time
  *       400:
  *         description: |
- *           Validation error, insufficient balance, or limit exceeded:
- *           - Daily count limit (max 3/day)
- *           - Daily amount limit (max 500 GC/day)
- *           - Wagering limit (50% of deposits)
+ *           Validation error, insufficient balance, missing UPI, or limit exceeded
  *       401:
  *         description: Unauthorized
  */

@@ -332,7 +332,14 @@ if (nodeEnv !== 'test') {
       // Initialize scheduler (event-driven, no cron jobs)
       const { initializeScheduler } = require(path.join(__dirname, 'services/scheduler.service'));
       initializeScheduler();
-      
+
+      const wh = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
+      if (wh.startsWith('http://') || wh.startsWith('https://')) {
+        Logger.warn(
+          'RAZORPAY_WEBHOOK_SECRET looks like a URL. Use the signing secret from Razorpay Dashboard → Webhooks (not your API base URL). Top-up verify will fail until fixed.'
+        );
+      }
+
       server.listen(PORT, () => {
         const environment = process.env.NODE_ENV || ENV.DEVELOPMENT;
         Logger.info('Server running', { port: PORT, environment });

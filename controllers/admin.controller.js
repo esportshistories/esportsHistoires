@@ -1897,7 +1897,7 @@ const getWithdrawalRequests = asyncHandler(async (req, res) => {
 /**
  * Update withdrawal request status (Admin only)
  * PATCH /api/admin/withdrawals/:transactionId/status
- * After admin does manual payment to user, mark as success. To reject and refund user balance, mark as fail.
+ * **pending** only: success = you paid the user manually (wallet already debited on request); fail = refund user.
  */
 const updateWithdrawalStatus = asyncHandler(async (req, res) => {
   const { transactionId } = req.params;
@@ -1911,9 +1911,9 @@ const updateWithdrawalStatus = asyncHandler(async (req, res) => {
   }
 
   try {
-    const result = await walletService.updateWithdrawalStatus(transactionId, status);
+    const result = await walletService.updateWithdrawalStatus(transactionId, status, 'admin');
 
-    res.success(HTTP_STATUS.OK, `Withdrawal status updated to ${status}`, {
+    const payload = {
       transaction: {
         _id: result.transaction._id,
         userId: result.transaction.userId,
@@ -1923,6 +1923,7 @@ const updateWithdrawalStatus = asyncHandler(async (req, res) => {
         status: result.transaction.status,
         verifiedBy: result.transaction.verifiedBy,
         verifiedAt: result.transaction.verifiedAt,
+        bankReference: result.transaction.bankReference || undefined,
         createdAt: result.transaction.createdAt,
         updatedAt: result.transaction.updatedAt
       },
@@ -1930,10 +1931,13 @@ const updateWithdrawalStatus = asyncHandler(async (req, res) => {
         balanceINR: result.wallet.balanceINR,
         updatedAt: result.wallet.updatedAt
       },
-      message: status === 'success'
-        ? 'Withdrawal marked as paid. User was paid manually.'
-        : 'Withdrawal rejected. Amount has been refunded to user wallet.'
-    });
+      message:
+        status === 'fail'
+          ? 'Withdrawal rejected. Amount refunded to user wallet.'
+          : 'Withdrawal marked paid (manual settlement; user wallet was already debited on request).'
+    };
+
+    res.success(HTTP_STATUS.OK, `Withdrawal status updated to ${status}`, payload);
   } catch (error) {
     if (error.message === 'Transaction not found') return res.notFound(error.message);
     if (error.message === 'Can only update status for withdrawal transactions') return res.badRequest(error.message);

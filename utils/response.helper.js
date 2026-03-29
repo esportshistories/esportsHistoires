@@ -114,7 +114,7 @@ const asyncHandler = (fn) => {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((error) => {
       if (error instanceof AppError) {
-        return ResponseHelper.error(res, error.status, error.message, null, error);
+        return ResponseHelper.error(res, error.status, error.message, error.errors ?? null, error);
       }
       const Logger = require('./logger');
       Logger.error('Async handler error', {

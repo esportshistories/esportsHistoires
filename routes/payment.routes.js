@@ -20,8 +20,26 @@ const {
   verifyRazorpayPayment,
   razorpayWebhook
 } = require('../controllers/razorpay.controller');
+const { requestWithdraw } = require('../controllers/wallet.controller');
+const { normalizeWithdrawBody } = require('../middleware/normalizeWithdraw.middleware');
 
 const router = express.Router();
+
+const withdrawBodyValidators = [
+  body('amountINR')
+    .isFloat({ min: 0.01 })
+    .withMessage('amountINR or amount must be a positive number'),
+  body('description')
+    .optional()
+    .trim()
+    .isString()
+    .withMessage('description must be a string'),
+  body('upiId')
+    .optional()
+    .trim()
+    .matches(/^[\w.-]+@[\w.-]+$/)
+    .withMessage('upiId / vpa / upi must be a valid UPI ID (e.g. name@bank)')
+];
 
 const upiDepositBodyValidators = [
   body('amountINR')
@@ -117,6 +135,18 @@ router.post(
   handlePaymentWebhook
 );
 
+/**
+ * Alias of POST /api/wallet/withdraw — pending withdrawal for admin manual payout.
+ */
+router.post(
+  '/withdraw',
+  authenticate,
+  normalizeWithdrawBody,
+  withdrawBodyValidators,
+  validate,
+  requestWithdraw
+);
+
 router.post(
   '/razorpay/order',
   authenticate,
@@ -141,7 +171,7 @@ router.post(
   verifyRazorpayPayment
 );
 
-// Razorpay webhook must be raw-body verified (wired in server.js)
+// Razorpay webhooks: raw body (wired in server.js)
 router.post('/razorpay/webhook', razorpayWebhook);
 
 module.exports = router;
