@@ -1,4 +1,4 @@
-/**
+/*
  * @swagger
  * /api/payment/create-qr:
  *   post:
@@ -77,7 +77,7 @@
  *               $ref: '#/components/schemas/Error'
  */
 
-/**
+/*
  * @swagger
  * /api/payment/deposit:
  *   post:
@@ -146,7 +146,7 @@
  *               $ref: '#/components/schemas/Error'
  */
 
-/**
+/*
  * @swagger
  * /api/payment/confirm:
  *   post:
@@ -208,7 +208,7 @@
  *               $ref: '#/components/schemas/Error'
  */
 
-/**
+/*
  * @swagger
  * /api/payment/qr-status/{qrCodeId}:
  *   get:
@@ -273,7 +273,7 @@
  *               $ref: '#/components/schemas/Error'
  */
 
-/**
+/*
  * @swagger
  * /api/payment/close-qr/{qrCodeId}:
  *   post:
@@ -303,7 +303,7 @@
  *               $ref: '#/components/schemas/Error'
  */
 
-/**
+/*
  * @swagger
  * /api/payment/webhook:
  *   post:

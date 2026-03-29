@@ -9,6 +9,7 @@ const path = require('path');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validation.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
+const { authenticateAdminSse } = require('../middleware/sseAdminAuth.middleware');
 const { isAdmin } = require('../middleware/admin.middleware');
 const { veryStrictRateLimiter } = require('../middleware/rateLimit.middleware');
 
@@ -46,7 +47,6 @@ const upload = multer({
   }
 });
 const {
-  getAdminCSRFToken,
   adminLogin,
   generateNextDayLobbies,
   generateLobbies,
@@ -80,6 +80,7 @@ const {
   getBankStatements,
   sendCustomNotification,
   getDashboardStats,
+  streamAdminDashboard,
   getAnalytics,
   getLobbyFinancialHistory,
   createOrganization,
@@ -102,8 +103,6 @@ const {
 const { updateRoom, notifyLobbyFilling } = require('../controllers/tournament.controller');
 
 const router = express.Router();
-
-router.get('/csrf-token', getAdminCSRFToken);
 
 router.post(
   '/login',
@@ -675,6 +674,13 @@ router.get(
   authenticate,
   isAdmin,
   getDashboardStats
+);
+
+/** SSE — same stats payload as GET /dashboard/stats; use Bearer or ?access_token= for EventSource */
+router.get(
+  '/dashboard/stream',
+  authenticateAdminSse,
+  streamAdminDashboard
 );
 
 router.get(

@@ -22,7 +22,6 @@ const {
   googleLogin,
   googleOAuthInitiate,
   googleOAuthCallback,
-  getCSRFToken,
   refreshToken,
   forgotPassword,
   resetPassword,
@@ -160,8 +159,6 @@ router.post(
 router.get('/google', googleOAuthInitiate);
 
 router.get('/google/callback', googleOAuthCallback);
-
-router.get('/csrf-token', getCSRFToken);
 
 router.post(
   '/google-login',

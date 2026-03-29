@@ -103,15 +103,8 @@
  *       Single login for every account type (user, host, admin, org_manager).
  *       On success, `data.role` and `data.user.role` tell the client which UI to show.
  *       Admins can use this instead of POST /api/admin/login; tokens work the same for /api/admin/* (role is checked from DB on each request).
- *       Returns access and refresh tokens. Requires CSRF token in X-CSRF-Token header — get it from GET /api/auth/csrf-token first.
+ *       Returns access and refresh tokens.
  *     tags: [Authentication]
- *     parameters:
- *       - in: header
- *         name: X-CSRF-Token
- *         required: true
- *         schema:
- *           type: string
- *         description: CSRF token obtained from GET /api/auth/csrf-token
  *     requestBody:
  *       required: true
  *       content:
@@ -136,12 +129,6 @@
  *               $ref: '#/components/schemas/Error'
  *       401:
  *         description: Invalid credentials or email not verified
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       403:
- *         description: CSRF token missing or invalid
  *         content:
  *           application/json:
  *             schema:
@@ -357,53 +344,6 @@
  *         description: Redirect to frontend with tokens in query parameters
  *       500:
  *         description: OAuth error
- */
-
-/**
- * @swagger
- * /api/auth/csrf-token:
- *   get:
- *     summary: Get CSRF token
- *     description: Retrieves CSRF token for use in state-changing requests (POST, PUT, DELETE, PATCH). Token is also set in X-CSRF-Token response header and XSRF-TOKEN cookie. Include the token in X-CSRF-Token header for subsequent requests.
- *     tags: [Authentication]
- *     responses:
- *       200:
- *         description: CSRF token retrieved successfully
- *         headers:
- *           X-CSRF-Token:
- *             description: CSRF token in response header
- *             schema:
- *               type: string
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: CSRF token retrieved successfully
- *                 data:
- *                   type: object
- *                   properties:
- *                     csrfToken:
- *                       type: string
- *                       description: CSRF token to include in X-CSRF-Token header
- *                       example: "abc123xyz..."
- *                     message:
- *                       type: string
- *                       example: Include this token in X-CSRF-Token header for POST, PUT, DELETE, and PATCH requests
- *       500:
- *         description: Failed to generate CSRF token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
  */
 
 /**

@@ -24,69 +24,6 @@
  *           type: array
  *           items:
  *             type: string
- *     UpiTopupInitiateData:
- *       type: object
- *       description: Payload from POST /api/payment/create-qr or POST /api/payment/deposit (data field)
- *       properties:
- *         qrCodeId:
- *           type: string
- *           description: Use with confirm, qr-status, close-qr
- *         depositRequestId:
- *           type: string
- *           description: Same as qrCodeId — clearer label for manual/deposit flows
- *         paymentId:
- *           type: string
- *         receiptCode:
- *           type: string
- *         merchantUpi:
- *           type: string
- *           description: Merchant VPA from PAYMENT_UPI_ID (for manual entry in UPI apps)
- *         merchantName:
- *           type: string
- *         qrCodeImage:
- *           type: string
- *           nullable: true
- *           description: Base64 PNG data URL when includeQr true; null for deposit / includeQr false
- *         qrCodeSVG:
- *           type: string
- *           nullable: true
- *         qrCodeString:
- *           type: string
- *           description: UPI intent URI / deep link
- *         upiLink:
- *           type: string
- *         amountINR:
- *           type: number
- *           nullable: true
- *         creditINR:
- *           type: number
- *           nullable: true
- *         fixedAmount:
- *           type: boolean
- *         description:
- *           type: string
- *           description: Note shown in UPI flow
- *         expiresAt:
- *           type: string
- *           format: date-time
- *         transactionId:
- *           type: string
- *           description: MongoDB WalletHistory _id
- *         paymentMethod:
- *           type: string
- *           enum: [upi_qr, upi_link]
- *         payerUPI:
- *           type: string
- *           description: Echo of request when payerUPI was sent
- *         includeQr:
- *           type: boolean
- *           description: Present on create-qr; omitted or false for deposit-only route
- *         status:
- *           type: string
- *           example: pending
- *           description: User-facing status until admin verifies
- *         message:
- *           type: string
  *     SuccessResponse:
  *       type: object
  *       properties:
@@ -1388,7 +1325,7 @@
  *     description: Wallet and balance management endpoints
  *   - name: Payment
  *     description: |
- *       Top-up / deposit: manual UPI (`/api/payment/create-qr`, `/api/payment/deposit`, confirm & status routes) and Cashfree PG (`/api/payment/cashfree/*`).
+ *       Top-up via Cashfree PG (`/api/payment/cashfree/*`), withdraw alias (`/api/payment/withdraw`).
  *   - name: Tournament
  *     description: Tournament and lobby management endpoints
  *   - name: Admin

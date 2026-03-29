@@ -1,67 +1,12 @@
 /**
  * @swagger
- * /api/admin/csrf-token:
- *   get:
- *     summary: Get CSRF token (Admin)
- *     description: Retrieves CSRF token for use in state-changing admin requests (POST, PUT, DELETE, PATCH). Token is also set in X-CSRF-Token response header and XSRF-TOKEN cookie. Include the token in X-CSRF-Token header for subsequent admin requests. Admin login also requires CSRF token - get token first, then include in login request header.
- *     tags: [Admin]
- *     responses:
- *       200:
- *         description: CSRF token retrieved successfully
- *         headers:
- *           X-CSRF-Token:
- *             description: CSRF token in response header
- *             schema:
- *               type: string
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: CSRF token retrieved successfully
- *                 data:
- *                   type: object
- *                   properties:
- *                     csrfToken:
- *                       type: string
- *                       description: CSRF token to include in X-CSRF-Token header
- *                       example: "abc123xyz..."
- *                     message:
- *                       type: string
- *                       example: Include this token in X-CSRF-Token header for POST, PUT, DELETE, and PATCH requests
- *       500:
- *         description: Failed to generate CSRF token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-
-/**
- * @swagger
  * /api/admin/login:
  *   post:
  *     summary: Admin-only login (legacy)
  *     description: |
  *       **Deprecated for new clients:** use `POST /api/auth/login` for everyone; response includes `role` for routing.
  *       This route still rejects non-admins **before** password check (403), which slightly reduces credential-enumeration noise for admin-only UIs.
- *       Requires CSRF token from GET /api/admin/csrf-token.
  *     tags: [Admin]
- *     parameters:
- *       - in: header
- *         name: X-CSRF-Token
- *         required: true
- *         schema:
- *           type: string
- *         description: CSRF token obtained from GET /api/admin/csrf-token
  *     requestBody:
  *       required: true
  *       content:
@@ -128,7 +73,7 @@
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       403:
- *         description: You are not authorized (non-admin user) or CSRF token missing/invalid
+ *         description: You are not authorized (non-admin user)
  *         content:
  *           application/json:
  *             schema:
@@ -394,14 +339,14 @@
  *                 type: number
  *                 enum: [25, 50, 75, 100, 150, 200, 300]
  *                 example: 100
- *                 description: Single entry fee in GC. If provided, creates lobbies with this price. Alternative to entryFees array.
+ *                 description: Single entry fee in INR (wallet). If provided, creates lobbies with this price. Alternative to entryFees array.
  *               entryFees:
  *                 type: array
  *                 items:
  *                   type: number
  *                   enum: [25, 50, 75, 100, 150, 200, 300]
  *                 example: [100, 200, 300]
- *                 description: Array of entry fees in GC. If not provided, uses default from mode config. Multiple entry fees will create separate lobbies for each. If 'price' is provided, it takes precedence.
+ *                 description: Array of entry fees in INR (wallet). If not provided, uses default from mode config. Multiple entry fees will create separate lobbies for each. If 'price' is provided, it takes precedence.
  *               region:
  *                 type: string
  *                 enum: [Asia, Global]
@@ -689,8 +634,8 @@
  *         name: role
  *         schema:
  *           type: string
- *           enum: [user, host, admin]
- *         description: Filter users by role
+ *           enum: [user, host, admin, org_manager]
+ *         description: Filter users by role (omit for all roles). Org managers include `managedOrganizations` when they own or manage an org.
  *     responses:
  *       200:
  *         description: Users retrieved successfully
@@ -1754,7 +1699,7 @@
  *                           type:
  *                             type: string
  *                             example: topup
- *                           amountGC:
+ *                           amountINR:
  *                             type: number
  *                           description:
  *                             type: string
@@ -1783,7 +1728,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/payments/pending:
  *   get:
@@ -1863,8 +1808,6 @@
  *                           type:
  *                             type: string
  *                             example: topup
- *                           amountGC:
- *                             type: number
  *                           amountINR:
  *                             type: number
  *                           description:
@@ -1911,7 +1854,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/topup-transactions/{transactionId}/update-status:
  *   post:
@@ -1971,7 +1914,7 @@
  *                         type:
  *                           type: string
  *                           example: topup
- *                         amountGC:
+ *                         amountINR:
  *                           type: number
  *                         description:
  *                           type: string
@@ -1987,7 +1930,7 @@
  *                     wallet:
  *                       type: object
  *                       properties:
- *                         balanceGC:
+ *                         balanceINR:
  *                           type: number
  *                         updatedAt:
  *                           type: string
@@ -2078,7 +2021,7 @@
  *                           type:
  *                             type: string
  *                             example: withdrawal
- *                           amountGC:
+ *                           amountINR:
  *                             type: number
  *                           description:
  *                             type: string
@@ -2086,9 +2029,9 @@
  *                             type: string
  *                             enum: [pending, success, fail]
  *                             description: pending = awaiting admin payment; success = admin paid; fail = rejected (refunded)
- *                           userBalanceGC:
+ *                           userBalanceINR:
  *                             type: number
- *                             description: User current balance (so admin can verify user had sufficient balance)
+ *                             description: User current wallet balance in INR (so admin can verify user had sufficient balance)
  *                           createdAt:
  *                             type: string
  *                             format: date-time
@@ -2164,7 +2107,7 @@
  *                         type:
  *                           type: string
  *                           example: withdrawal
- *                         amountGC:
+ *                         amountINR:
  *                           type: number
  *                         description:
  *                           type: string
@@ -2186,7 +2129,7 @@
  *                     wallet:
  *                       type: object
  *                       properties:
- *                         balanceGC:
+ *                         balanceINR:
  *                           type: number
  *                         updatedAt:
  *                           type: string
@@ -2203,7 +2146,7 @@
  *         description: Transaction not found
  */
 
-/**
+/*
  * @swagger
  * /api/admin/transactions/search-by-utr:
  *   get:
@@ -2230,7 +2173,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/transactions/verify-by-utr:
  *   post:
@@ -2274,7 +2217,7 @@
  *         description: Transaction not found
  */
 
-/**
+/*
  * @swagger
  * /api/admin/transactions/{transactionId}/add-bank-reference:
  *   post:
@@ -2316,7 +2259,7 @@
  *         description: Transaction not found
  */
 
-/**
+/*
  * @swagger
  * /api/admin/transactions/bulk-verify-from-statement:
  *   post:
@@ -2349,7 +2292,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/transactions/verify-from-api:
  *   post:
@@ -2804,14 +2747,15 @@
  *   get:
  *     summary: Get overall dashboard statistics (Admin only)
  *     description: |
- *       Key financial and operational metrics:
- *       - totalUsers, totalDepositsINR, totalTopupGC (user top-ups)
+ *       Key financial and operational metrics (amounts in INR / wallet units):
+ *       - totalUsers, totalDepositsINR (= userSelfTopupsINR), userSelfTopupsINR, adminManualTopupsINR, totalTopupsINR (user+admin wallet top-ups)
+ *       - lobbyStats: totalCreated, finishedSuccessful (completed+result_published), cancelled, running
  *       - activeLobbyCount (currently running lobbies)
- *       - prizePoolDistributed (rewards paid to winners, GC)
- *       - totalHostFeePaid (host fee credited to hosts, GC)
+ *       - prizePoolDistributed (rewards paid to winners)
+ *       - totalHostFeePaid (host fee credited to hosts)
  *       - platformFeeCollected, casterFeeCollected (from completed lobbies; includes Clash Squad fee logic)
  *       - platformProfit = platform + caster fee (for server/expenses)
- *       - feesBreakdown = platformFeeGC, casterFeeGC, hostFeeGC, totalFeesGC, winnerPoolPaidGC (from completed lobbies)
+ *       - feesBreakdown (all-time): sums platformFees on tournaments with status completed or result_published only
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -2840,19 +2784,32 @@
  *                       example: 125
  *                     totalDepositsINR:
  *                       type: number
- *                       description: User top-up total (INR)
- *                     totalTopupGC:
+ *                       description: Same as userSelfTopupsINR (legacy key)
+ *                     userSelfTopupsINR:
  *                       type: number
- *                       description: User top-up total (GC)
+ *                       description: Successful top-ups where addedBy=user
+ *                     adminManualTopupsINR:
+ *                       type: number
+ *                       description: Successful top-ups where addedBy=admin
+ *                     totalTopupsINR:
+ *                       type: number
+ *                       description: userSelfTopupsINR + adminManualTopupsINR
+ *                     lobbyStats:
+ *                       type: object
+ *                       properties:
+ *                         totalCreated: { type: integer }
+ *                         finishedSuccessful: { type: integer }
+ *                         cancelled: { type: integer }
+ *                         running: { type: integer }
  *                     activeLobbyCount:
  *                       type: integer
  *                       description: Lobbies currently running
  *                     prizePoolDistributed:
  *                       type: number
- *                       description: GC paid to winners
+ *                       description: Amount paid to winners (wallet / INR)
  *                     totalHostFeePaid:
  *                       type: number
- *                       description: GC credited to hosts
+ *                       description: Host fee credited to hosts (INR)
  *                     platformFeeCollected:
  *                       type: number
  *                     casterFeeCollected:
@@ -2862,13 +2819,13 @@
  *                       description: platform + caster fee (for server/expenses)
  *                     feesBreakdown:
  *                       type: object
- *                       description: From completed lobbies (BR/LW/CS). platformFeeGC, casterFeeGC, hostFeeGC, totalFeesGC, winnerPoolPaidGC
+ *                       description: All-time totals (BR/LW/CS) — sum of platformFees on every completed/result_published lobby; INR
  *                       properties:
- *                         platformFeeGC: { type: number }
- *                         casterFeeGC: { type: number }
- *                         hostFeeGC: { type: number }
- *                         totalFeesGC: { type: number }
- *                         winnerPoolPaidGC: { type: number }
+ *                         platformFeeINR: { type: number }
+ *                         casterFeeINR: { type: number }
+ *                         hostFeeINR: { type: number }
+ *                         totalFeesINR: { type: number }
+ *                         winnerPoolPaidINR: { type: number }
  *                     totalDeposits:
  *                       type: number
  *                     totalRewards:
@@ -2879,6 +2836,31 @@
  *         description: Unauthorized
  *       403:
  *         description: Forbidden - Admin access required
+ */
+
+/**
+ * @swagger
+ * /api/admin/dashboard/stream:
+ *   get:
+ *     summary: SSE stream of dashboard statistics (Admin only)
+ *     description: |
+ *       Server-Sent Events. Sends `event: stats` with JSON `{ type: 'dashboard', data: { ...same fields as GET /dashboard/stats } }`.
+ *       Repeats on an interval (default 45s, env ADMIN_DASHBOARD_SSE_INTERVAL_MS). Also pushed shortly after wallet top-up/reward changes.
+ *       Auth: `Authorization: Bearer` or `?access_token=` (for browser EventSource).
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: query
+ *         name: access_token
+ *         schema:
+ *           type: string
+ *         description: Optional JWT if header cannot be set (e.g. EventSource in browser)
+ *     responses:
+ *       200:
+ *         description: text/event-stream (not JSON)
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden — admin only
  */
 
 /**
@@ -2958,7 +2940,7 @@
  *                             example: 1100
  */
 
-/**
+/*
  * @swagger
  * /api/admin/payments/verification-stats:
  *   get:
@@ -2976,7 +2958,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/payments/flagged:
  *   get:
@@ -3007,7 +2989,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/payments/process-email:
  *   post:
@@ -3036,7 +3018,7 @@
  *         description: Forbidden - Admin access required
  */
 
-/**
+/*
  * @swagger
  * /api/admin/payments/bank-statements:
  *   get:

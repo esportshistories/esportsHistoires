@@ -2,7 +2,6 @@
  * Room Data Privacy and Socket Updates Test
  */
 process.env.NODE_ENV = 'test';
-process.env.DISABLE_CSRF = 'true';
 require('dotenv').config({ path: require('path').join(__dirname, '../.env.test') });
 
 const request = require('supertest');

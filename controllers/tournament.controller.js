@@ -39,6 +39,13 @@ const broadcastTournamentListUpdate = (payload) => {
       // Ignore individual write errors; connection cleanup happens on 'close'
     }
   }
+
+  try {
+    const { scheduleAdminDashboardSseBroadcastDebounced } = require('../services/adminDashboardSse.service');
+    scheduleAdminDashboardSseBroadcastDebounced();
+  } catch (e) {
+    /* optional */
+  }
 };
 
 /**

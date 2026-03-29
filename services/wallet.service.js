@@ -9,6 +9,10 @@ const WalletHistory = require('../models/WalletHistory.model');
 const User = require('../models/User.model');
 const UserPaymentInfo = require('../models/UserPaymentInfo.model');
 const { roundInr } = require('../utils/inr');
+const {
+  normalizeWalletHistoryDoc,
+  normalizeWalletHistoryList
+} = require('../utils/walletHistoryResponse');
 const Logger = require('../utils/logger');
 const cashfreePayoutService = require('./cashfreePayout.service');
 const { runWithTransaction } = require('../utils/runWithTransaction');
@@ -16,6 +20,15 @@ const sessOpt = (session) => (session ? { session } : {});
 const withSession = (query, session) => (session ? query.session(session) : query);
 const { transformTransactionStatus } = require('../utils/transaction.helper');
 const { broadcastWalletUpdate, broadcastTransactionUpdate, broadcastWalletHistoryUpdate } = require('./websocket.service');
+
+function notifyAdminDashboardSseDebounced() {
+  try {
+    const { scheduleAdminDashboardSseBroadcastDebounced } = require('./adminDashboardSse.service');
+    scheduleAdminDashboardSseBroadcastDebounced();
+  } catch (_) {
+    /* optional */
+  }
+}
 /** Daily withdrawal limit: max count per day (default 3) */
 const WITHDRAWAL_DAILY_MAX_COUNT = Math.max(1, parseInt(process.env.WITHDRAWAL_DAILY_MAX_COUNT, 10) || 3);
 
@@ -109,6 +122,7 @@ const addBalance = async (userId, amountINR, description, status = 'success', ad
     // Emit balance update so user UI updates immediately without refresh (topup/admin add)
     broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'balance');
     broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'history');
+    notifyAdminDashboardSseDebounced();
     return wallet;
   }
 
@@ -180,6 +194,7 @@ const addReward = async (userId, rewardGC, description, tournamentId, metadata =
     return { wallet: w, transaction: Array.isArray(t) ? t[0] : t };
   });
   broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'history');
+  notifyAdminDashboardSseDebounced();
   return wallet;
 };
 
@@ -867,6 +882,8 @@ const updateTransactionStatus = async (transactionId, status, verifiedBy = 'admi
     Logger.error('Error broadcasting transaction update via WebSocket', { errName: broadcastError.name });
   }
 
+  notifyAdminDashboardSseDebounced();
+
   // Return fresh transaction object (convert to document if needed by caller)
   // Reload as document for consistency with existing code that might expect mongoose document
   const freshTransaction = await WalletHistory.findById(transactionId);
@@ -930,7 +947,7 @@ const getAllTopupTransactions = async (limit = 50, skip = 0, status = null, emai
   ]);
   
   return {
-    transactions,
+    transactions: normalizeWalletHistoryList(transactions),
     total,
     limit,
     skip
@@ -997,7 +1014,7 @@ const getPendingTopupTransactions = async (limit = 50, skip = 0, email = null, s
   ]);
   
   return {
-    transactions,
+    transactions: normalizeWalletHistoryList(transactions),
     total,
     limit,
     skip
@@ -1057,11 +1074,11 @@ const getWithdrawalRequests = async (limit = 50, skip = 0, status = null, email 
     const wallet = walletByUser[uid];
     // Use upiId stored in transaction (new records); fall back to UserPaymentInfo for older records
     const upiId = r.upiId || upiByUser[uid] || null;
-    return {
+    return normalizeWalletHistoryDoc({
       ...r,
       upiId,
       userBalanceINR: wallet ? wallet.balanceINR : 0
-    };
+    });
   });
 
   return { requests: enriched, total, limit, skip };

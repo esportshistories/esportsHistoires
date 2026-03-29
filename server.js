@@ -10,7 +10,6 @@ const connectMongoDB = require(path.join(__dirname, 'config/mongodb'));
 const { attachResponseHelpers } = require(path.join(__dirname, 'utils/response.helper'));
 const Logger = require(path.join(__dirname, 'utils/logger'));
 const { generalRateLimiter, strictRateLimiter } = require(path.join(__dirname, 'middleware/rateLimit.middleware'));
-const { generateCSRFToken, verifyCSRF } = require(path.join(__dirname, 'middleware/csrf.middleware'));
 
 // Load .env file only in local development (when NODE_ENV is not set or is development)
 // In production (Render), environment variables are set directly
@@ -164,8 +163,8 @@ const corsOptions = {
   origin: getCorsOrigin,
   credentials: true, // Allow credentials (cookies, authorization headers)
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-CSRF-Token', 'XSRF-Token'],
-  exposedHeaders: ['Authorization', 'X-CSRF-Token'], // Expose CSRF token header so frontend can read it
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Authorization'],
   optionsSuccessStatus: 200, // Some legacy browsers (IE11) choke on 204
   preflightContinue: false, // Let cors handle preflight, don't pass to next middleware
   // Explicitly handle null origin for credentials
@@ -196,43 +195,6 @@ app.use(attachResponseHelpers);
 
 // Static uploads (e.g. profile images, statements)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// CSRF Protection
-// Generate CSRF token on safe requests (GET, HEAD, OPTIONS) to provide token to clients
-// Verify CSRF token on state-changing requests (POST, PUT, DELETE, PATCH)
-// Can be disabled by setting DISABLE_CSRF=true in environment
-// Additionally, CSRF is automatically disabled in local development to simplify Swagger/Postman usage.
-// Note: Clients must make a GET request first to obtain CSRF token, then include it in X-CSRF-Token header for state-changing requests
-// Google login is exempt from CSRF as OAuth redirects make it difficult to obtain token, and Google token verification provides security
-const CSRF_ENABLED = process.env.DISABLE_CSRF !== 'true' && nodeEnv !== ENV.DEVELOPMENT;
-if (CSRF_ENABLED) {
-  // Verify CSRF token on state-changing requests
-  app.use('/api', (req, res, next) => {
-    const safeMethods = ['GET', 'HEAD', 'OPTIONS'];
-    
-    // Exempt Google login from CSRF (OAuth flow makes it difficult to get token first)
-    const isGoogleLogin = req.path === '/auth/google-login' && req.method === 'POST';
-    
-    if (safeMethods.includes(req.method)) {
-      // Generate token for safe methods
-      return generateCSRFToken(req, res, next);
-    }
-    
-    // Skip CSRF verification for Google login
-    if (isGoogleLogin) {
-      return next();
-    }
-
-    // Cashfree PG webhook (server-to-server, no CSRF token)
-    const url = `${req.originalUrl || ''}${req.path || ''}`;
-    if (req.method === 'POST' && url.includes('/payment/cashfree/webhook')) {
-      return next();
-    }
-    
-    // Verify token for state-changing methods
-    return verifyCSRF(req, res, next);
-  });
-}
 
 // Apply general rate limiting to all API routes (except health check)
 app.use('/api', generalRateLimiter);

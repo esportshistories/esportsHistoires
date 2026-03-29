@@ -179,71 +179,6 @@
  *         timestamp:
  *           type: string
  *           format: date-time
- * 
- *     PaymentQRStatusUpdate:
- *       type: object
- *       properties:
- *         transactionId:
- *           type: string
- *         qrCodeId:
- *           type: string
- *         paymentId:
- *           type: string
- *           nullable: true
- *         receiptCode:
- *           type: string
- *           nullable: true
- *         status:
- *           type: string
- *           enum: [pending, success, fail]
- *           description: User-facing status (pending/success/fail)
- *         originalStatus:
- *           type: string
- *           enum: [success, fail]
- *           description: Original status from database
- *         amountINR:
- *           type: number
- *           nullable: true
- *         paymentMethod:
- *           type: string
- *           nullable: true
- *         paymentVerified:
- *           type: boolean
- *         verifiedBy:
- *           type: string
- *           enum: [user, admin]
- *           nullable: true
- *         verifiedAt:
- *           type: string
- *           format: date-time
- *           nullable: true
- *         utr:
- *           type: string
- *           nullable: true
- *         bankReference:
- *           type: string
- *           nullable: true
- *         isExpired:
- *           type: boolean
- *         expiresAt:
- *           type: string
- *           format: date-time
- *           nullable: true
- *         createdAt:
- *           type: string
- *           format: date-time
- *           nullable: true
- *         updatedAt:
- *           type: string
- *           format: date-time
- *           nullable: true
- *         action:
- *           type: string
- *           enum: [approved, rejected, updated]
- *           description: Action type - 'approved' when admin approves payment, 'rejected' when admin rejects, 'updated' when transaction is updated
- *         timestamp:
- *           type: string
- *           format: date-time
  *
  *     LobbyChatMessage:
  *       type: object
@@ -366,10 +301,9 @@
  *       - `lobby-chat:error` - Lobby chat error. Payload: `{ message }`
  *       
  *       **Wallet/Top-up Events (use these so user balance updates without refresh):**
- *       - `wallet:balance-updated` - **Balance changed.** Emitted when: topup verified by admin, admin adds balance, withdrawal, withdrawal cancelled (refund), reward, refund, join. Payload: `{ userId, wallet: { balanceINR, updatedAt }, transaction? }`. Update UI balance from `data.wallet.balanceINR`.
- *       - `wallet:transaction-updated` - Transaction status updated (admin approves/rejects topup). Payload: `{ userId, transaction, wallet?, action: 'approved'|'rejected'|'updated' }`.
+ *       - `wallet:balance-updated` - **Balance changed.** Emitted when: top-up succeeds (e.g. Cashfree), admin adds balance, withdrawal, withdrawal cancelled (refund), reward, refund, join. Payload: `{ userId, wallet: { balanceINR, updatedAt }, transaction? }`. Update UI balance from `data.wallet.balanceINR`.
+ *       - `wallet:transaction-updated` - Transaction status updated. Payload: `{ userId, transaction, wallet?, action: 'approved'|'rejected'|'updated' }`.
  *       - `wallet:history-updated` - New transaction added (topup, withdrawal, withdrawal cancelled, reward, refund, join). Payload: `{ userId, transaction, wallet?, timestamp }`.
- *       - `payment:qr-status-updated` - QR payment status updated (pending/success/fail), includes QR details.
  *       
  *       **Example (JavaScript/Socket.IO Client):**
  *       ```javascript
@@ -432,7 +366,7 @@
  *         // data.standings - aggregated totalPoint, kills, booyah, totalPositionPoints, position
  *       });
  *
- *       // Listen for wallet updates (admin top-up, topup verified, withdrawal, reward, refund, join, cancel)
+ *       // Listen for wallet updates (top-up, admin balance add, withdrawal, reward, refund, join, cancel)
  *       socket.on('wallet:balance-updated', (data) => {
  *         setBalance(data.wallet.balanceINR);
  *         // data.wallet.balanceINR - updated balance (no reload needed)
@@ -449,12 +383,6 @@
  *       socket.on('wallet:history-updated', (data) => {
  *         console.log('New transaction added:', data);
  *         // data.transaction - new transaction details (type, amountINR, status, displayStatus)
- *       });
- *
- *       socket.on('payment:qr-status-updated', (data) => {
- *         console.log('QR payment status updated:', data);
- *         // data.status - 'pending', 'success', or 'fail'
- *         // data.action - 'approved', 'rejected', or 'updated'
  *       });
  *
  *       // Lobby chat (sirf jab lobby live ho) – send + receive
@@ -513,7 +441,7 @@
  *                       type: array
  *                       items:
  *                         type: string
- *                       example: ['wallet:balance-updated', 'wallet:transaction-updated', 'wallet:history-updated', 'payment:qr-status-updated']
+ *                       example: ['wallet:balance-updated', 'wallet:transaction-updated', 'wallet:history-updated']
  *                     lobbyChat:
  *                       type: array
  *                       items:
@@ -553,7 +481,6 @@
  *                 - wallet:balance-updated
  *                 - wallet:transaction-updated
  *                 - wallet:history-updated
- *                 - payment:qr-status-updated
  *
  *                 Lobby Chat:
  *                 - lobby-chat:message
@@ -571,10 +498,9 @@
  *
  *       | Event | When | Payload (data) |
  *       |-------|------|----------------|
- *       | `wallet:balance-updated` | Topup verified, admin add balance, withdrawal, withdrawal cancelled, reward, refund, join | `userId`, `wallet: { balanceINR, updatedAt }`, `transaction?` |
- *       | `wallet:transaction-updated` | Admin approves/rejects topup | `userId`, `transaction`, `wallet?`, `action`: approved/rejected/updated |
+ *       | `wallet:balance-updated` | Top-up success, admin add balance, withdrawal, withdrawal cancelled, reward, refund, join | `userId`, `wallet: { balanceINR, updatedAt }`, `transaction?` |
+ *       | `wallet:transaction-updated` | Transaction status change | `userId`, `transaction`, `wallet?`, `action`: approved/rejected/updated |
  *       | `wallet:history-updated` | New transaction (topup, withdrawal, withdrawal cancelled, reward, refund, join) | `userId`, `transaction`, `wallet?` |
- *       | `payment:qr-status-updated` | QR payment status change | `transactionId`, `status`, `amountINR`, `action`, etc. |
  *       | `tournament:status-updated` | Tournament status change or user joins tournament | `tournamentId`, `status`, `date`, `startTime`, `mode`, `subMode`, `joinedTeams`, `type?`, `room?` |
  *       | `tournament:room-updated` | Tournament goes live — room pushed to joined participants only (no refresh needed) | `tournamentId`, `type: 'room-updated'`, `room: { roomId, password }`, `timestamp` |
  *       | `notification:push` | Push (new lobby / lobby filling / room updated / custom admin) | `type`, `title`, `message`, `timestamp`; `new-lobby-created` → `tournaments[]`; `lobby-filling` → `tournamentId`, `lobbyName`, `slotsLeft`; `room-updated` → `tournamentId`, `room: { roomId, password }`; `admin-notification` → custom title + message |
@@ -582,7 +508,7 @@
  *       | `lobby-chat:closed` | Chat room closed (completed/cancelled) | `tournamentId`, `status` |
  *       | `lobby-chat:error` | Lobby chat error | `message` |
  *
- *       **Schemas:** See components – WalletBalanceUpdate, WalletTransactionUpdate, WalletHistoryUpdate, PaymentQRStatusUpdate, LobbyChatMessage, LobbyChatClosed, WebSocketEvent.
+ *       **Schemas:** See components – WalletBalanceUpdate, WalletTransactionUpdate, WalletHistoryUpdate, LobbyChatMessage, LobbyChatClosed, WebSocketEvent.
  *     tags: [WebSocket]
  *     responses:
  *       200:

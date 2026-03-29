@@ -2,7 +2,6 @@
  * Verification Test: Duplicate FCM Notifications
  */
 process.env.NODE_ENV = 'test';
-process.env.DISABLE_CSRF = 'true';
 require('dotenv').config({ path: require('path').join(__dirname, '../.env.test'), override: true });
 
 const { setupTestDB, cleanupTestDB, closeTestDB } = require('./setup');
