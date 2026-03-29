@@ -4,7 +4,12 @@
  * Semantics:
  * - totalDepositsINR / userSelfTopupsINR: successful wallet top-ups initiated by users (UPI/Cashfree etc., addedBy=user).
  * - adminManualTopupsINR: successful type=topup, addedBy=admin (manual credits).
- * - totalTopupsINR: userSelfTopupsINR + adminManualTopupsINR (excludes system/host fee lines).
+ * - totalTopupsINR: userSelfTopupsINR + adminManualTopupsINR (excludes system host-fee lines).
+ *
+ * Profit (tournament economics):
+ * - platformProfit, tournamentFeeProfitINR, netProfit: platform + caster fee summed from finished lobbies
+ *   (users played → entry pool split; yeh platform/caster ka hissa = "fee se earn").
+ * - walletNetFlowINR: userSelfTopupsINR − prizePoolDistributed (wallet cashflow metric, not fee profit).
  */
 
 const User = require('../models/User.model');
@@ -72,9 +77,11 @@ async function fetchAdminDashboardStatsData() {
   const casterFeeCollected = completedFees.casterFee || 0;
   const totalHostFeeFromLobbies = completedFees.hostFee || 0;
   const winnerPoolFromLobbies = completedFees.winnerPool || 0;
-  const platformProfit = platformFeeCollected + casterFeeCollected;
+  const tournamentFeeProfitINR = platformFeeCollected + casterFeeCollected;
+  const platformProfit = tournamentFeeProfitINR;
   const totalFeesFromCompletedLobbies =
     platformFeeCollected + casterFeeCollected + totalHostFeeFromLobbies;
+  const walletNetFlowINR = userSelfTopupsINR - prizePoolDistributed;
 
   return {
     totalUsers,
@@ -95,6 +102,8 @@ async function fetchAdminDashboardStatsData() {
     platformFeeCollected,
     casterFeeCollected,
     platformProfit,
+    /** Same as platformProfit — explicit name for API consumers */
+    tournamentFeeProfitINR,
     feesBreakdown: {
       platformFeeINR: platformFeeCollected,
       casterFeeINR: casterFeeCollected,
@@ -104,7 +113,9 @@ async function fetchAdminDashboardStatsData() {
     },
     totalDeposits: userSelfTopupsINR,
     totalRewards: prizePoolDistributed,
-    netProfit: userSelfTopupsINR - prizePoolDistributed
+    /** Tournament se fee share (platform + caster); NOT wallet top-up minus rewards */
+    netProfit: tournamentFeeProfitINR,
+    walletNetFlowINR
   };
 }
 

@@ -2816,7 +2816,16 @@
  *                       type: number
  *                     platformProfit:
  *                       type: number
- *                       description: platform + caster fee (for server/expenses)
+ *                       description: Tournament fee profit — sum of platform + caster share from finished lobbies (same as tournamentFeeProfitINR)
+ *                     tournamentFeeProfitINR:
+ *                       type: number
+ *                       description: Same as platformProfit (explicit name)
+ *                     netProfit:
+ *                       type: number
+ *                       description: Same as tournament fee profit (platform + caster from completed/result_published lobbies); not wallet top-ups minus prizes
+ *                     walletNetFlowINR:
+ *                       type: number
+ *                       description: userSelfTopupsINR minus prizePoolDistributed (wallet cash-flow)
  *                     feesBreakdown:
  *                       type: object
  *                       description: All-time totals (BR/LW/CS) — sum of platformFees on every completed/result_published lobby; INR
@@ -2829,8 +2838,6 @@
  *                     totalDeposits:
  *                       type: number
  *                     totalRewards:
- *                       type: number
- *                     netProfit:
  *                       type: number
  *       401:
  *         description: Unauthorized
