@@ -78,6 +78,17 @@ const authenticate = async (req, res, next) => {
       }
     }
 
+    if (user.isBlocked) {
+      if (res.forbidden) {
+        return res.forbidden(MESSAGES.ERROR.USER_BLOCKED);
+      }
+      return res.status(HTTP_STATUS.FORBIDDEN).json({
+        status: HTTP_STATUS.FORBIDDEN,
+        success: false,
+        message: MESSAGES.ERROR.USER_BLOCKED
+      });
+    }
+
     // Attach user to request object
     req.user = user;
     req.userId = decoded.userId;

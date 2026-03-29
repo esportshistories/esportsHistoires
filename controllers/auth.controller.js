@@ -1154,6 +1154,9 @@ const googleLogin = asyncHandler(async (req, res) => {
     console.error('Google login error raw', error);
     
     // Handle specific Google auth errors
+    if (error.message === MESSAGES.ERROR.USER_BLOCKED) {
+      return res.forbidden(MESSAGES.ERROR.USER_BLOCKED);
+    }
     if (error.message && error.message.includes('Invalid token')) {
       return res.unauthorized(MESSAGES.ERROR.GOOGLE_TOKEN_INVALID);
     }
@@ -1187,6 +1190,10 @@ const refreshToken = asyncHandler(async (req, res) => {
   
   if (!checkUserExists(res, user)) {
     return;
+  }
+
+  if (user.isBlocked) {
+    return res.forbidden(MESSAGES.ERROR.USER_BLOCKED);
   }
 
   // Clean up expired tokens first
