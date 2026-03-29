@@ -255,7 +255,7 @@
  *                       type: number
  *                     paymentMethod:
  *                       type: string
- *                       enum: [upi_qr, upi_link, manual, razorpay, other]
+ *                       enum: [upi_qr, upi_link, manual, razorpay, cashfree, other]
  *                     utr:
  *                       type: string
  *                     isExpired:
@@ -374,7 +374,7 @@
  *                 type: string
  *     responses:
  *       200:
- *         description: Same as /api/wallet/withdraw; `data.mode` = pending_admin
+ *         description: Same as /api/wallet/withdraw; `data.mode` may be pending_admin, pending_payout, or automatic (Cashfree Payout)
  *       400:
  *         description: Validation / limits / missing UPI
  *       401:
@@ -383,15 +383,13 @@
 
 /**
  * @swagger
- * /api/payment/razorpay/order:
+ * /api/payment/cashfree/order:
  *   post:
- *     summary: Start Razorpay top-up (create order)
+ *     summary: Start Cashfree top-up (create order)
  *     description: |
- *       Creates a pending `WalletHistory` top-up and creates a Razorpay **Order**.
- *       Returns `keyId`, `orderId`, `amountPaise` for Razorpay Checkout.
- *       Requires server env: `RAZORPAY_ENABLED=true`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`.
- *       **CSRF:** In production, send `X-CSRF-Token` (same as other authenticated POSTs).
- *       **Local dev:** CSRF auto-disabled, so `X-CSRF-Token` usually not required.
+ *       Creates a pending `WalletHistory` top-up and a Cashfree **order**; returns `paymentSessionId` for Cashfree Web Checkout (UPI + cards).
+ *       Env: `CASHFREE_PG_ENABLED=true`, `CASHFREE_PG_CLIENT_ID`, `CASHFREE_PG_CLIENT_SECRET`, optional `CASHFREE_ENV=sandbox|production`.
+ *       Register webhook URL `POST /api/payment/cashfree/webhook` in Cashfree Dashboard (PG → Webhooks); signing uses the same client secret.
  *     tags: [Payment]
  *     security:
  *       - bearerAuth: []
@@ -407,80 +405,24 @@
  *                 type: number
  *                 format: float
  *                 minimum: 1
- *                 description: Amount in INR credited 1:1 to wallet on successful payment
- *                 example: 2
+ *                 description: Amount in INR (1:1 wallet credit on success)
+ *                 example: 10
  *     responses:
  *       200:
- *         description: orderId issued; open Razorpay checkout on client
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: number
- *                   example: 200
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                 data:
- *                   type: object
- *                   properties:
- *                     keyId:
- *                       type: string
- *                       description: Razorpay key id for client checkout
- *                     orderId:
- *                       type: string
- *                       description: Razorpay order id (also stored as WalletHistory paymentId)
- *                     amountINR:
- *                       type: number
- *                     amountPaise:
- *                       type: number
- *                       description: Amount for Razorpay (paise)
- *                     currency:
- *                       type: string
- *                       example: INR
- *                     receipt:
- *                       type: string
- *                     walletTransactionId:
- *                       type: string
- *                       description: MongoDB id of pending WalletHistory row
- *       400:
- *         description: Validation error (e.g. amountINR too low)
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: Unauthorized
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
+ *         description: Use `paymentSessionId` with Cashfree JS SDK checkout
  *       503:
- *         description: Razorpay not enabled or missing configuration on server
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
+ *         description: Cashfree PG not configured
  *       502:
- *         description: Razorpay order create API error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
+ *         description: Cashfree order API error
  */
 
 /**
  * @swagger
- * /api/payment/razorpay/verify:
+ * /api/payment/cashfree/verify:
  *   post:
- *     summary: Verify Razorpay payment (authenticated)
+ *     summary: Verify Cashfree payment (authenticated)
  *     description: |
- *       After Razorpay Checkout completes on client, send `orderId`, `paymentId`, `signature`.
- *       Server verifies signature, optionally fetches payment from Razorpay API (must be `captured`), then credits wallet.
+ *       After checkout, poll with merchant `orderId` from `/cashfree/order`. Server fetches order from Cashfree; if `PAID`, credits wallet.
  *     tags: [Payment]
  *     security:
  *       - bearerAuth: []
@@ -490,68 +432,26 @@
  *         application/json:
  *           schema:
  *             type: object
- *             required: [orderId, paymentId, signature]
+ *             required: [orderId]
  *             properties:
  *               orderId:
  *                 type: string
- *                 description: Razorpay order id from `/api/payment/razorpay/order`
- *               paymentId:
- *                 type: string
- *                 description: Razorpay payment id from Checkout
- *               signature:
- *                 type: string
- *                 description: Razorpay checkout signature
+ *                 description: Merchant order id from `/api/payment/cashfree/order`
  *     responses:
  *       200:
- *         description: Verified; wallet may be credited
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: number
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   type: object
- *                   properties:
- *                     orderId:
- *                       type: string
- *                     status:
- *                       type: string
- *                     balanceINR:
- *                       type: number
- *       400:
- *         description: Validation, bad signature, or amount mismatch
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: Unauthorized
+ *         description: Wallet updated or payment still pending
  *       404:
  *         description: Order not found for this user
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       503:
- *         description: Razorpay not configured
- *       502:
- *         description: Razorpay API error
  */
 
 /**
  * @swagger
- * /api/payment/razorpay/webhook:
+ * /api/payment/cashfree/webhook:
  *   post:
- *     summary: Razorpay webhook (payment captured)
+ *     summary: Cashfree PG webhook (payment success)
  *     description: |
- *       Called by Razorpay (server-to-server). Verifies `x-razorpay-signature` using `RAZORPAY_WEBHOOK_SECRET`.
- *       On `payment.captured`, credits wallet for the matching pending top-up (idempotent).
+ *       Server-to-server. Verifies `x-webhook-signature` + `x-webhook-timestamp` with `CASHFREE_PG_CLIENT_SECRET` (HMAC-SHA256 base64 on `timestamp+rawBody`).
+ *       Credits wallet when payment is SUCCESS (idempotent).
  *     tags: [Payment]
  *     requestBody:
  *       required: true
@@ -559,18 +459,9 @@
  *         application/json:
  *           schema:
  *             type: object
- *             description: Razorpay webhook event payload (varies by event)
  *     responses:
  *       200:
- *         description: Webhook acknowledged
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 ok:
- *                   type: boolean
- *                   example: true
+ *         description: Acknowledged
  *       400:
- *         description: Bad webhook signature / bad payload
+ *         description: Bad signature or JSON
  */

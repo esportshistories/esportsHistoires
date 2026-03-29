@@ -1388,7 +1388,7 @@
  *     description: Wallet and balance management endpoints
  *   - name: Payment
  *     description: |
- *       Top-up / deposit: manual UPI (`/api/payment/create-qr`, `/api/payment/deposit`, confirm & status routes) and Razorpay PG (`/api/payment/razorpay/*`).
+ *       Top-up / deposit: manual UPI (`/api/payment/create-qr`, `/api/payment/deposit`, confirm & status routes) and Cashfree PG (`/api/payment/cashfree/*`).
  *   - name: Tournament
  *     description: Tournament and lobby management endpoints
  *   - name: Admin

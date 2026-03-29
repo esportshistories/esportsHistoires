@@ -16,7 +16,11 @@ const { generateCSRFToken, verifyCSRF } = require(path.join(__dirname, 'middlewa
 // In production (Render), environment variables are set directly
 const nodeEnv = process.env.NODE_ENV || ENV.DEVELOPMENT;
 if (nodeEnv === ENV.DEVELOPMENT) {
-  require('dotenv').config({ path: path.join(__dirname, `.env.${nodeEnv}`) });
+  // Local file must win over inherited shell env (e.g. stale CASHFREE_* exports cause "authentication Failed")
+  require('dotenv').config({
+    path: path.join(__dirname, `.env.${nodeEnv}`),
+    override: true
+  });
 }
 
 /**
@@ -176,11 +180,11 @@ app.options('*', cors(corsOptions));
 // Parse cookies
 app.use(cookieParser());
 
-// Razorpay webhook signature verification requires raw JSON body.
+// Cashfree PG webhook signature verification requires raw JSON body.
 // This must run BEFORE express.json() so req.body stays a Buffer on that route.
 app.use((req, res, next) => {
   const url = req.originalUrl || req.url || '';
-  if (req.method === 'POST' && url.includes('/api/payment/razorpay/webhook')) {
+  if (req.method === 'POST' && url.includes('/api/payment/cashfree/webhook')) {
     return express.raw({ type: 'application/json' })(req, res, next);
   }
   return next();
@@ -219,9 +223,9 @@ if (CSRF_ENABLED) {
       return next();
     }
 
-    // Razorpay webhook (server-to-server, no CSRF token)
+    // Cashfree PG webhook (server-to-server, no CSRF token)
     const url = `${req.originalUrl || ''}${req.path || ''}`;
-    if (req.method === 'POST' && url.includes('/payment/razorpay/webhook')) {
+    if (req.method === 'POST' && url.includes('/payment/cashfree/webhook')) {
       return next();
     }
     
@@ -333,12 +337,6 @@ if (nodeEnv !== 'test') {
       const { initializeScheduler } = require(path.join(__dirname, 'services/scheduler.service'));
       initializeScheduler();
 
-      const wh = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
-      if (wh.startsWith('http://') || wh.startsWith('https://')) {
-        Logger.warn(
-          'RAZORPAY_WEBHOOK_SECRET looks like a URL. Use the signing secret from Razorpay Dashboard → Webhooks (not your API base URL). Top-up verify will fail until fixed.'
-        );
-      }
 
       server.listen(PORT, () => {
         const environment = process.env.NODE_ENV || ENV.DEVELOPMENT;

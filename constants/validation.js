@@ -77,9 +77,9 @@ const PAYMENT = {
   // UTR cron: only last UTR_CRON_WINDOW_MINUTES, current day, max UTR_CRON_CHECK_LIMIT checks per UTR; then admin manual
   UTR_CRON_CHECK_LIMIT: parseInt(process.env.UTR_CRON_CHECK_LIMIT || '5', 10),
   UTR_CRON_WINDOW_MINUTES: parseInt(process.env.UTR_CRON_WINDOW_MINUTES || '30', 10),
-  /** IMAP poll for bank alert emails (scheduler). Off by default — use Razorpay or admin tools instead. */
+  /** IMAP poll for bank alert emails (scheduler). Off by default — use Cashfree PG or admin tools instead. */
   ENABLE_BANK_STATEMENT_EMAIL_POLLING: process.env.ENABLE_BANK_STATEMENT_EMAIL_POLLING === 'true',
-  /** Manual UPI / static QR top-up (create-qr, deposit). Off by default — use Razorpay. */
+  /** Manual UPI / static QR top-up (create-qr, deposit). Off by default — use Cashfree PG. */
   ENABLE_LEGACY_UPI_TOPUP: process.env.ENABLE_LEGACY_UPI_TOPUP === 'true'
 };
 

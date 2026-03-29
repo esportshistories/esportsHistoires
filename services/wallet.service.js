@@ -10,6 +10,7 @@ const User = require('../models/User.model');
 const UserPaymentInfo = require('../models/UserPaymentInfo.model');
 const { roundInr } = require('../utils/inr');
 const Logger = require('../utils/logger');
+const cashfreePayoutService = require('./cashfreePayout.service');
 const { runWithTransaction } = require('../utils/runWithTransaction');
 const sessOpt = (session) => (session ? { session } : {});
 const withSession = (query, session) => (session ? query.session(session) : query);
@@ -384,7 +385,27 @@ const getMaxWithdrawable = async (userId, isHost = false) => {
 };
 
 /**
- * Withdraw: debit wallet and create a **pending** withdrawal for admin to pay manually (UPI/bank), then PATCH success/fail.
+ * Refund wallet and mark withdrawal failed after automated payout error.
+ */
+const refundFailedPayoutWithdrawal = async (userId, transactionId, amountINR, description, reason) => {
+  const short = String(reason || 'error').slice(0, 200);
+  await runWithTransaction(async (session) => {
+    const w = await getOrCreateWallet(userId, session);
+    w.balanceINR = roundInr((w.balanceINR || 0) + roundInr(amountINR));
+    await w.save(sessOpt(session));
+    const t = await withSession(WalletHistory.findById(transactionId), session);
+    if (t && t.status === 'pending') {
+      t.status = 'fail';
+      t.verifiedBy = 'system';
+      t.verifiedAt = new Date();
+      t.description = `${description} | Payout failed: ${short}`;
+      await t.save(sessOpt(session));
+    }
+  });
+};
+
+/**
+ * Withdraw: debit wallet, then either Cashfree UPI payout (if configured) or **pending** for admin manual payout.
  */
 const withdrawBalance = async (userId, amountINR, description, options = {}) => {
   const amt = roundInr(amountINR);
@@ -447,13 +468,100 @@ const withdrawBalance = async (userId, amountINR, description, options = {}) => 
   });
   broadcastWalletUpdateHelper(userId.toString(), wallet, transaction, 'history');
 
-  const walletFinal = await getOrCreateWallet(userId);
-  const txFinal = await WalletHistory.findById(transaction._id);
-  return {
-    wallet: walletFinal,
-    transaction: txFinal,
-    mode: 'pending_admin'
-  };
+  const useCashfreePayout = cashfreePayoutService.isPayoutConfigured();
+  if (!useCashfreePayout) {
+    const walletFinal = await getOrCreateWallet(userId);
+    const txFinal = await WalletHistory.findById(transaction._id);
+    return {
+      wallet: walletFinal,
+      transaction: txFinal,
+      mode: 'pending_admin'
+    };
+  }
+
+  const userFull = await User.findById(userId).select('name').lean();
+  const transferId = `wd_${String(transaction._id)}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 40);
+
+  try {
+    const payoutResp = await cashfreePayoutService.transferToUpi({
+      transferId,
+      amountINR: amt,
+      vpa: upiId,
+      beneficiaryName: userFull?.name
+    });
+
+    if (cashfreePayoutService.isTerminalPayoutFailure(payoutResp)) {
+      const reason =
+        payoutResp?.status_description || payoutResp?.status_code || payoutResp?.status || 'Payout failed';
+      await refundFailedPayoutWithdrawal(userId, transaction._id, amt, description, reason);
+      const walletAfter = await getOrCreateWallet(userId);
+      const txAfter = await WalletHistory.findById(transaction._id).lean();
+      broadcastWalletUpdateHelper(userId.toString(), walletAfter, txAfter, 'history');
+      const err = new Error(reason);
+      err.statusCode = 502;
+      err.cashfree = payoutResp;
+      throw err;
+    }
+
+    if (cashfreePayoutService.isTerminalPayoutSuccess(payoutResp)) {
+      await runWithTransaction(async (session) => {
+        const t = await withSession(WalletHistory.findById(transaction._id), session);
+        if (!t || t.status !== 'pending') throw new Error('Withdrawal no longer pending');
+        t.status = 'success';
+        t.paymentVerified = true;
+        t.verifiedBy = 'system';
+        t.verifiedAt = new Date();
+        t.bankReference = payoutResp.cf_transfer_id || payoutResp.transfer_id || transferId;
+        await t.save(sessOpt(session));
+      });
+      const walletFinal = await getOrCreateWallet(userId);
+      const txFinal = await WalletHistory.findById(transaction._id);
+      broadcastWalletUpdateHelper(userId.toString(), walletFinal, txFinal, 'history');
+      return {
+        wallet: walletFinal,
+        transaction: txFinal,
+        mode: 'automatic',
+        cashfreePayout: {
+          cfTransferId: payoutResp.cf_transfer_id,
+          status: payoutResp.status,
+          statusCode: payoutResp.status_code
+        }
+      };
+    }
+
+    await runWithTransaction(async (session) => {
+      const t = await withSession(WalletHistory.findById(transaction._id), session);
+      if (t && t.status === 'pending') {
+        t.bankReference = payoutResp.cf_transfer_id || payoutResp.transfer_id || transferId;
+        await t.save(sessOpt(session));
+      }
+    });
+    const walletFinal = await getOrCreateWallet(userId);
+    const txFinal = await WalletHistory.findById(transaction._id);
+    broadcastWalletUpdateHelper(userId.toString(), walletFinal, txFinal, 'history');
+    return {
+      wallet: walletFinal,
+      transaction: txFinal,
+      mode: 'pending_payout',
+      cashfreePayout: {
+        cfTransferId: payoutResp.cf_transfer_id,
+        status: payoutResp.status,
+        statusCode: payoutResp.status_code
+      }
+    };
+  } catch (e) {
+    if (e.statusCode === 502 && e.cashfree) throw e;
+    Logger.error('Cashfree payout withdraw failed', {
+      userId,
+      transactionId: transaction._id?.toString?.(),
+      message: e.message
+    });
+    await refundFailedPayoutWithdrawal(userId, transaction._id, amt, description, e.message || 'Payout error');
+    const walletAfter = await getOrCreateWallet(userId);
+    const txAfter = await WalletHistory.findById(transaction._id).lean();
+    broadcastWalletUpdateHelper(userId.toString(), walletAfter, txAfter, 'history');
+    throw e;
+  }
 };
 
 /**

@@ -602,7 +602,7 @@
  *     description: |
  *       **Same endpoint behaviour as** `POST /api/payment/withdraw` (alias for clients that mount money APIs under `/api/payment`).
  *       Body aliases: **`amount`** → `amountINR`; **`vpa`** / **`upi`** → `upiId`.
- *       Debits wallet and creates **`pending`** withdrawal; admin pays user manually then `PATCH /api/admin/withdrawals/:id/status` (**success** / **fail**).
+ *       Debits wallet. If **Cashfree Payout** is configured (`CASHFREE_PAYOUT_*`), initiates UPI payout (`automatic` / `pending_payout`). Otherwise **`pending_admin`** for manual admin payout via `PATCH /api/admin/withdrawals/:id/status`.
  *       **Limits:** Balance, daily count/amount (IST), host min/max per request.
  *     tags: [Wallet]
  *     security:
@@ -638,7 +638,7 @@
  *                 description: Alias for upiId
  *     responses:
  *       200:
- *         description: Request queued (`data.mode` = pending_admin, `transaction.status` = pending)
+ *         description: See `data.mode` — pending_admin, pending_payout, or automatic (Cashfree)
  *         content:
  *           application/json:
  *             schema:
@@ -658,7 +658,7 @@
  *                   properties:
  *                     mode:
  *                       type: string
- *                       enum: [pending_admin]
+ *                       enum: [pending_admin, pending_payout, automatic]
  *                     balanceINR:
  *                       type: number
  *                     updatedAt:

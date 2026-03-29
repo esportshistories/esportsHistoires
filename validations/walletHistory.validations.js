@@ -27,7 +27,7 @@ module.exports = {
     default: 'user'
   },
   paymentMethod: {
-    enum: ['upi_qr', 'upi_link', 'manual', 'razorpay', 'other'],
+    enum: ['upi_qr', 'upi_link', 'manual', 'razorpay', 'cashfree', 'other'],
     default: null
   },
   verifiedBy: {

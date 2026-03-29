@@ -44,7 +44,7 @@ const getBalance = asyncHandler(async (req, res) => {
 });
 
 /**
- * Request withdrawal (cash-out). Debits wallet and creates **pending** row; admin pays manually then PATCH success/fail.
+ * Request withdrawal (cash-out). Cashfree Payout enabled → UPI transfer; else pending for admin.
  * Optional body `upiId` overrides profile payout UPI for this request.
  * POST /api/wallet/withdraw
  */
@@ -63,10 +63,18 @@ const requestWithdraw = asyncHandler(async (req, res) => {
       upiId: upiId != null ? String(upiId).trim() : undefined
     });
 
-    res.success(HTTP_STATUS.OK, 'Withdrawal request submitted. An admin will process it.', {
+    const msg =
+      result.mode === 'automatic'
+        ? 'Withdrawal completed. UPI payout processed.'
+        : result.mode === 'pending_payout'
+          ? 'Withdrawal submitted. Payout is processing; you will be updated when it completes.'
+          : 'Withdrawal request submitted. An admin will process it.';
+
+    res.success(HTTP_STATUS.OK, msg, {
       balanceINR: result.wallet.balanceINR,
       updatedAt: result.wallet.updatedAt,
       mode: result.mode,
+      cashfreePayout: result.cashfreePayout || undefined,
       transaction: {
         _id: result.transaction._id,
         type: result.transaction.type,
@@ -96,6 +104,14 @@ const requestWithdraw = asyncHandler(async (req, res) => {
       (error.message.includes('Minimum withdrawal') || error.message.includes('Maximum withdrawal'))
     ) {
       return res.badRequest(error.message);
+    }
+    if (Number(error.statusCode) >= 400 && (error.cashfree || error.statusCode === 502)) {
+      return res.error(
+        HTTP_STATUS.BAD_GATEWAY,
+        error.message || 'Payout failed. Your balance has been refunded.',
+        { code: 'WITHDRAW_PAYOUT_FAILED' },
+        error
+      );
     }
     throw error;
   }

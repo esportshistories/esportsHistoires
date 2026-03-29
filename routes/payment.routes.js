@@ -16,10 +16,10 @@ const {
   handlePaymentWebhook
 } = require('../controllers/payment.controller');
 const {
-  createRazorpayOrder,
-  verifyRazorpayPayment,
-  razorpayWebhook
-} = require('../controllers/razorpay.controller');
+  createCashfreeOrder,
+  verifyCashfreePayment,
+  cashfreeWebhook
+} = require('../controllers/cashfree.controller');
 const { requestWithdraw } = require('../controllers/wallet.controller');
 const { normalizeWithdrawBody } = require('../middleware/normalizeWithdraw.middleware');
 
@@ -148,7 +148,7 @@ router.post(
 );
 
 router.post(
-  '/razorpay/order',
+  '/cashfree/order',
   authenticate,
   [
     body('amountINR')
@@ -156,22 +156,18 @@ router.post(
       .withMessage('amountINR must be at least 1')
   ],
   validate,
-  createRazorpayOrder
+  createCashfreeOrder
 );
 
 router.post(
-  '/razorpay/verify',
+  '/cashfree/verify',
   authenticate,
-  [
-    body('orderId').notEmpty().trim().withMessage('orderId is required'),
-    body('paymentId').notEmpty().trim().withMessage('paymentId is required'),
-    body('signature').notEmpty().trim().withMessage('signature is required')
-  ],
+  [body('orderId').notEmpty().trim().withMessage('orderId is required')],
   validate,
-  verifyRazorpayPayment
+  verifyCashfreePayment
 );
 
-// Razorpay webhooks: raw body (wired in server.js)
-router.post('/razorpay/webhook', razorpayWebhook);
+// Cashfree PG webhooks: raw body (wired in server.js)
+router.post('/cashfree/webhook', cashfreeWebhook);
 
 module.exports = router;

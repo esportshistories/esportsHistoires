@@ -26,7 +26,7 @@ const PAYER_UPI_PATTERN = /^[\w.-]+@[\w]+$/;
 const initiateUpiDepositFlow = async (req, res, opts = {}) => {
   if (!PAYMENT.ENABLE_LEGACY_UPI_TOPUP) {
     return res.forbidden(
-      'Manual UPI and QR top-up is disabled. Use Razorpay: POST /api/payment/razorpay/order.'
+      'Manual UPI and QR top-up is disabled. Use Cashfree: POST /api/payment/cashfree/order.'
     );
   }
 
