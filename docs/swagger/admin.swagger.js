@@ -145,9 +145,10 @@
  *   post:
  *     summary: Create organization (Admin)
  *     description: |
- *       Creates a new organization and assigns an owner.
- *       - Owner user will automatically get role `org_manager` (unless already admin).
- *       - Owner is also added to managerIds list by default.
+ *       Creates a new organization and a dedicated org-manager account for it.
+ *       - Always creates a **new** user with role `org_manager` using the provided manager email.
+ *       - If the manager email already exists as a user, the request is rejected.
+ *       - The created org-manager becomes the organization owner and is added to `managerIds`.
  *     tags: [Admin, Organization]
  *     security:
  *       - bearerAuth: []
@@ -159,23 +160,42 @@
  *             type: object
  *             required:
  *               - name
- *               - ownerUserId
+ *               - manager
  *             properties:
  *               name:
  *                 type: string
  *                 description: Organization display name
  *                 example: "Skull Esports"
- *               ownerUserId:
- *                 type: string
- *                 description: User ID of org owner (will be promoted to org_manager)
  *               slug:
  *                 type: string
  *                 description: Optional slug (URL-safe). If not provided, generated from name.
+ *               manager:
+ *                 type: object
+ *                 description: New org-manager account details (must be a fresh email).
+ *                 required:
+ *                   - email
+ *                   - name
+ *                   - password
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     description: New, unused email for the organization manager account
+ *                     example: "s8ul.org@booyahx.com"
+ *                   name:
+ *                     type: string
+ *                     description: Org-manager display name
+ *                     example: "S8UL Org Admin"
+ *                   password:
+ *                     type: string
+ *                     minLength: 6
+ *                     description: Password for the new org-manager account
+ *                     example: "StrongPass123!"
  *     responses:
  *       201:
  *         description: Organization created successfully
  *       400:
- *         description: Validation error or organization with same name/slug exists
+ *         description: Validation error, organization name/slug exists, or manager email already used
  *       401:
  *         description: Unauthorized
  *       403:
@@ -281,6 +301,112 @@
  *         description: Organization manager removed successfully
  *       400:
  *         description: Validation error (e.g., trying to remove owner)
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - Admin access required
+ *       404:
+ *         description: Organization not found
+ *
+ * /api/admin/organizations/{orgId}/block:
+ *   patch:
+ *     summary: Block an organization (Admin)
+ *     description: |
+ *       Sets `isActive` to `false` for the organization.
+ *       - Blocked organizations cannot be used for tournament hosting by org managers.
+ *       - Returns 400 if the organization is already blocked.
+ *     tags: [Admin, Organization]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: orgId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Organization ID
+ *     responses:
+ *       200:
+ *         description: Organization blocked successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Organization blocked successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     organizationId:
+ *                       type: string
+ *                     name:
+ *                       type: string
+ *                     isActive:
+ *                       type: boolean
+ *                       example: false
+ *       400:
+ *         description: Organization is already blocked
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - Admin access required
+ *       404:
+ *         description: Organization not found
+ *
+ * /api/admin/organizations/{orgId}/unblock:
+ *   patch:
+ *     summary: Unblock an organization (Admin)
+ *     description: |
+ *       Sets `isActive` to `true` for the organization.
+ *       - Restores full org-manager access for tournament hosting.
+ *       - Returns 400 if the organization is already active.
+ *     tags: [Admin, Organization]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: orgId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Organization ID
+ *     responses:
+ *       200:
+ *         description: Organization unblocked successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Organization unblocked successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     organizationId:
+ *                       type: string
+ *                     name:
+ *                       type: string
+ *                     isActive:
+ *                       type: boolean
+ *                       example: true
+ *       400:
+ *         description: Organization is already active
  *       401:
  *         description: Unauthorized
  *       403:
@@ -821,6 +947,37 @@
  *         description: Unauthorized
  *       403:
  *         description: Forbidden - Admin access required
+ */
+
+/**
+ * @swagger
+ * /api/admin/org-managers/create:
+ *   post:
+ *     summary: Create organization manager account (Admin only)
+ *     description: |
+ *       Creates a new user with role `org_manager`, email pre-verified.
+ *       Optionally pass `organizationId` to add them to that org's managers list immediately.
+ *       If the organization is missing or inactive, the user record is not kept (rolled back).
+ *     tags: [Admin, Organization]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateOrgManagerRequest'
+ *     responses:
+ *       201:
+ *         description: Organization manager account created successfully
+ *       400:
+ *         description: Validation error or user with email already exists
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - Admin access required
+ *       404:
+ *         description: Organization not found (when organizationId was sent)
  */
 
 /**

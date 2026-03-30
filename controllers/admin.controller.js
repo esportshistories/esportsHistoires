@@ -716,51 +716,88 @@ const listUsers = asyncHandler(async (req, res) => {
 /**
  * Create organization (Admin only)
  * POST /api/admin/organizations
- * Body: { name, ownerUserId, slug? }
+ * Body: {
+ *   name: string,
+ *   slug?: string,
+ *   manager: { email: string, name: string, password: string }
+ * }
+ *
+ * Rules:
+ * - Always create a NEW org-manager account for the organization.
+ * - If manager.email already exists as a user, request is rejected.
  */
 const createOrganization = asyncHandler(async (req, res) => {
-  const { name, ownerUserId, slug } = req.body;
+  const { name, slug, manager } = req.body;
 
-  if (!name || !ownerUserId) {
-    return res.badRequest('name and ownerUserId are required');
+  if (!name || !manager || !manager.email || !manager.name || !manager.password) {
+    return res.badRequest(
+      'name and manager{email,name,password} are required for organization creation'
+    );
   }
 
-  const owner = await User.findById(ownerUserId);
-  if (!owner) {
-    return res.notFound('Owner user not found');
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    return res.badRequest('Organization name cannot be empty');
   }
 
-  // Ensure owner has org_manager role (unless already admin)
-  if (owner.role !== 'admin' && owner.role !== 'org_manager') {
-    owner.role = 'org_manager';
-    await owner.save();
+  const managerEmail = manager.email.toLowerCase().trim();
+
+  // Ensure email is not already used by any user
+  const existingUser = await User.findOne({ email: managerEmail });
+  if (existingUser) {
+    return res.badRequest(MESSAGES.ERROR.USER_EXISTS);
   }
 
   // Generate slug if not provided
   let finalSlug = slug;
   if (!finalSlug) {
-    finalSlug = name
+    finalSlug = trimmedName
       .toLowerCase()
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
   }
 
-  const existingByName = await Organization.findOne({ name: name.trim() });
+  // Ensure org name is unique
+  const existingByName = await Organization.findOne({ name: trimmedName });
   if (existingByName) {
     return res.badRequest('Organization with this name already exists');
   }
 
+  // Ensure slug is unique (append timestamp if collision)
   const existingBySlug = await Organization.findOne({ slug: finalSlug });
   if (existingBySlug) {
     finalSlug = `${finalSlug}-${Date.now()}`;
   }
 
+  // Create dedicated org-manager user for this organization
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash(manager.password, salt);
+
+  const orgManagerUser = new User({
+    email: managerEmail,
+    name: manager.name.trim(),
+    password: hashedPassword,
+    role: 'org_manager',
+    isEmailVerified: true
+  });
+
+  await orgManagerUser.save();
+
+  // Optionally create wallet for org-manager (same behavior as createOrgManager)
+  try {
+    await walletService.getOrCreateWallet(orgManagerUser._id.toString());
+  } catch (walletError) {
+    Logger.error('Error creating wallet for organization manager (createOrganization)', {
+      errName: walletError.name
+    });
+  }
+
   const org = await Organization.create({
-    name: name.trim(),
+    name: trimmedName,
     slug: finalSlug,
-    ownerUserId: owner._id,
-    managerIds: [owner._id],
+    ownerUserId: orgManagerUser._id,
+    managerIds: [orgManagerUser._id],
     isActive: true
   });
 
@@ -773,6 +810,12 @@ const createOrganization = asyncHandler(async (req, res) => {
       managerIds: org.managerIds,
       isActive: org.isActive,
       createdAt: org.createdAt
+    },
+    orgManager: {
+      id: orgManagerUser._id,
+      email: orgManagerUser.email,
+      name: orgManagerUser.name,
+      role: orgManagerUser.role
     }
   });
 });
@@ -908,6 +951,114 @@ const removeOrgManager = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Update primary organization manager/owner (Admin only)
+ * PATCH /api/admin/organizations/:orgId/manager
+ * Body: { newManagerUserId }
+ *
+ * Rules:
+ * - newManagerUserId must exist and have role 'org_manager'.
+ * - Organization must be active.
+ * - Owner is updated to the new manager and ensured in managerIds.
+ */
+const updateOrgPrimaryManager = asyncHandler(async (req, res) => {
+  const { orgId } = req.params;
+  const { newManagerUserId } = req.body;
+
+  if (!orgId || !newManagerUserId) {
+    return res.badRequest('orgId and newManagerUserId are required');
+  }
+
+  const org = await Organization.findById(orgId);
+  if (!org || !org.isActive) {
+    return res.notFound('Organization not found');
+  }
+
+  const newManager = await User.findById(newManagerUserId);
+  if (!newManager) {
+    return res.notFound('New manager user not found');
+  }
+
+  if (newManager.role !== 'org_manager') {
+    return res.badRequest('New manager must be an org_manager account');
+  }
+
+  const newManagerIdStr = newManager._id.toString();
+
+  // Update owner
+  org.ownerUserId = newManager._id;
+
+  // Ensure new manager is in managerIds
+  const hasManager = (org.managerIds || []).some(
+    (id) => id.toString() === newManagerIdStr
+  );
+  if (!hasManager) {
+    org.managerIds.push(newManager._id);
+  }
+
+  await org.save();
+
+  res.success(HTTP_STATUS.OK, 'Organization primary manager updated successfully', {
+    organizationId: org._id,
+    ownerUserId: org.ownerUserId,
+    managerIds: org.managerIds
+  });
+});
+
+/**
+ * Block an organization
+ * PATCH /api/admin/organizations/:orgId/block
+ * Sets isActive to false, which prevents org managers from performing org-related actions.
+ */
+const blockOrganization = asyncHandler(async (req, res) => {
+  const { orgId } = req.params;
+
+  const org = await Organization.findById(orgId);
+  if (!org) {
+    return res.notFound(MESSAGES.ERROR.ORGANIZATION_NOT_FOUND);
+  }
+
+  if (!org.isActive) {
+    return res.badRequest('Organization is already blocked');
+  }
+
+  org.isActive = false;
+  await org.save();
+
+  res.success(HTTP_STATUS.OK, MESSAGES.SUCCESS.ORGANIZATION_BLOCKED, {
+    organizationId: org._id,
+    name: org.name,
+    isActive: org.isActive
+  });
+});
+
+/**
+ * Unblock an organization
+ * PATCH /api/admin/organizations/:orgId/unblock
+ * Sets isActive to true, restoring org-related access for its managers.
+ */
+const unblockOrganization = asyncHandler(async (req, res) => {
+  const { orgId } = req.params;
+
+  const org = await Organization.findById(orgId);
+  if (!org) {
+    return res.notFound(MESSAGES.ERROR.ORGANIZATION_NOT_FOUND);
+  }
+
+  if (org.isActive) {
+    return res.badRequest('Organization is already active');
+  }
+
+  org.isActive = true;
+  await org.save();
+
+  res.success(HTTP_STATUS.OK, MESSAGES.SUCCESS.ORGANIZATION_UNBLOCKED, {
+    organizationId: org._id,
+    name: org.name,
+    isActive: org.isActive
+  });
+});
+
+/**
  * Block multiple users
  * POST /api/admin/users/block
  * Note: Admin users cannot be blocked
@@ -1035,6 +1186,67 @@ const createHost = asyncHandler(async (req, res) => {
       name: host.name,
       role: host.role
     }
+  });
+});
+
+/**
+ * Create organization manager account (new user, role org_manager)
+ * POST /api/admin/org-managers/create
+ * Body: { email, name, password, organizationId? }
+ */
+const createOrgManager = asyncHandler(async (req, res) => {
+  const { email, name, password, organizationId } = req.body;
+
+  if (!email || !name || !password) {
+    return res.badRequest('email, name, and password are required');
+  }
+
+  const existingUser = await User.findOne({ email: email.toLowerCase() });
+  if (existingUser) {
+    return res.badRequest(MESSAGES.ERROR.USER_EXISTS);
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash(password, salt);
+
+  const orgManager = new User({
+    email: email.toLowerCase(),
+    name: name.trim(),
+    password: hashedPassword,
+    role: 'org_manager',
+    isEmailVerified: true
+  });
+
+  await orgManager.save();
+
+  if (organizationId) {
+    const org = await Organization.findById(organizationId);
+    if (!org || !org.isActive) {
+      await User.deleteOne({ _id: orgManager._id });
+      return res.notFound('Organization not found');
+    }
+    const uidStr = orgManager._id.toString();
+    const exists = (org.managerIds || []).some((id) => id.toString() === uidStr);
+    if (!exists) {
+      org.managerIds.push(orgManager._id);
+      await org.save();
+    }
+  }
+
+  try {
+    await walletService.getOrCreateWallet(orgManager._id.toString());
+  } catch (walletError) {
+    Logger.error('Error creating wallet for org manager', { errName: walletError.name });
+  }
+
+  res.success(HTTP_STATUS.CREATED, MESSAGES.SUCCESS.ORG_MANAGER_CREATED, {
+    orgManager: {
+      id: orgManager._id,
+      email: orgManager.email,
+      name: orgManager.name,
+      role: orgManager.role
+    },
+    organizationId: organizationId || null
   });
 });
 
@@ -2791,6 +3003,7 @@ module.exports = {
   blockUsers,
   unblockUsers,
   createHost,
+  createOrgManager,
   listHostApplications,
   approveHostApplication,
   rejectHostApplication,
@@ -2821,5 +3034,8 @@ module.exports = {
   createOrganization,
   listOrganizations,
   addOrgManager,
-  removeOrgManager
+  removeOrgManager,
+  updateOrgPrimaryManager,
+  blockOrganization,
+  unblockOrganization
 };

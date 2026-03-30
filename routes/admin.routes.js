@@ -86,7 +86,10 @@ const {
   createOrganization,
   listOrganizations,
   addOrgManager,
-  removeOrgManager
+  removeOrgManager,
+  updateOrgPrimaryManager,
+  blockOrganization,
+  unblockOrganization
 } = require('../controllers/admin.controller');
 const {
   getInquiries,
@@ -745,9 +748,19 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('name is required'),
-    body('ownerUserId')
+    body('manager')
       .notEmpty()
-      .withMessage('ownerUserId is required')
+      .withMessage('manager object is required'),
+    body('manager.email')
+      .isEmail()
+      .withMessage('Valid manager.email is required'),
+    body('manager.name')
+      .trim()
+      .isLength({ min: 2, max: 100 })
+      .withMessage('manager.name must be between 2 and 100 characters'),
+    body('manager.password')
+      .isLength({ min: 6 })
+      .withMessage('manager.password must be at least 6 characters')
   ],
   validate,
   createOrganization
@@ -760,24 +773,31 @@ router.get(
   listOrganizations
 );
 
-router.post(
-  '/organizations/:orgId/managers',
+router.patch(
+  '/organizations/:orgId/manager',
   authenticate,
   isAdmin,
   [
-    body('userId')
+    body('newManagerUserId')
       .notEmpty()
-      .withMessage('userId is required')
+      .withMessage('newManagerUserId is required')
   ],
   validate,
-  addOrgManager
+  updateOrgPrimaryManager
 );
 
-router.delete(
-  '/organizations/:orgId/managers/:userId',
+router.patch(
+  '/organizations/:orgId/block',
   authenticate,
   isAdmin,
-  removeOrgManager
+  blockOrganization
+);
+
+router.patch(
+  '/organizations/:orgId/unblock',
+  authenticate,
+  isAdmin,
+  unblockOrganization
 );
 
 module.exports = router;

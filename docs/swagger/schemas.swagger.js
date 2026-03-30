@@ -1210,6 +1210,26 @@
  *           type: string
  *           minLength: 6
  *           example: 'password123'
+ *     CreateOrgManagerRequest:
+ *       type: object
+ *       required: ['email', 'name', 'password']
+ *       properties:
+ *         email:
+ *           type: string
+ *           format: email
+ *           example: 'manager@example.com'
+ *         name:
+ *           type: string
+ *           minLength: 2
+ *           maxLength: 100
+ *           example: 'Org Manager Name'
+ *         password:
+ *           type: string
+ *           minLength: 6
+ *           example: 'password123'
+ *         organizationId:
+ *           type: string
+ *           description: Optional. If set, user is appended to this organization's managerIds (active org only).
  *     HostApplication:
  *       type: object
  *       properties:
