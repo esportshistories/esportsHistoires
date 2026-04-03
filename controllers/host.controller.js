@@ -182,6 +182,34 @@ const applyForTournament = asyncHandler(async (req, res) => {
   await application.populate('tournamentId', 'game mode subMode date startTime');
   await application.populate('hostId', 'name email');
 
+  try {
+    const { broadcastHostApplicationSubmittedToAdmins } = require('../services/hostApplicationSse.service');
+    const t = application.tournamentId;
+    const h = application.hostId;
+    broadcastHostApplicationSubmittedToAdmins({
+      id: application._id.toString(),
+      status: application.status,
+      tournamentId: t && t._id ? t._id.toString() : application.tournamentId.toString(),
+      tournament: t && typeof t === 'object' && t.game
+        ? {
+            game: t.game,
+            mode: t.mode,
+            subMode: t.subMode,
+            date: t.date,
+            startTime: t.startTime
+          }
+        : null,
+      hostId: h && h._id ? h._id.toString() : application.hostId.toString(),
+      host: h && typeof h === 'object' && h.name
+        ? { name: h.name, email: h.email }
+        : null,
+      createdAt: application.createdAt,
+      applicationDetails: application.applicationDetails || {}
+    });
+  } catch (sseErr) {
+    Logger.error('Host application SSE: submit broadcast failed', { message: sseErr?.message });
+  }
+
   res.success(HTTP_STATUS.CREATED, MESSAGES.SUCCESS.HOST_APPLICATION_SUBMITTED, {
     application: {
       id: application._id,
@@ -562,10 +590,20 @@ const getMyLobbies = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * SSE: own host application status updates (host role only).
+ * GET /api/host/applications/stream
+ */
+const streamHostApplicationEvents = asyncHandler(async (req, res) => {
+  const { attachHostApplicationEventsSse } = require('../services/hostApplicationSse.service');
+  attachHostApplicationEventsSse(req, res);
+});
+
 module.exports = {
   listAvailableTournaments,
   applyForTournament,
   listMyApplications,
+  streamHostApplicationEvents,
   endTournament,
   getMyLobbies
 };

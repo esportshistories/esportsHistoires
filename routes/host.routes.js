@@ -7,11 +7,13 @@ const express = require('express');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validation.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
+const { authenticateHostSse } = require('../middleware/sseHostAuth.middleware');
 const { isHost } = require('../middleware/host.middleware');
 const {
   listAvailableTournaments,
   applyForTournament,
   listMyApplications,
+  streamHostApplicationEvents,
   endTournament,
   getMyLobbies
 } = require('../controllers/host.controller');
@@ -36,6 +38,13 @@ router.post(
   authenticate,
   isHost,
   applyForTournament
+);
+
+/** SSE — application approved/rejected; use Bearer or ?access_token= for EventSource */
+router.get(
+  '/applications/stream',
+  authenticateHostSse,
+  streamHostApplicationEvents
 );
 
 router.get(

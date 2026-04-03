@@ -83,6 +83,7 @@ const {
   sendCustomNotification,
   getDashboardStats,
   streamAdminDashboard,
+  streamAdminHostApplications,
   getAnalytics,
   getLobbyFinancialHistory,
   createOrganization,
@@ -299,6 +300,13 @@ router.post(
   ],
   validate,
   createHost
+);
+
+/** SSE — new host applications; use Bearer or ?access_token= for EventSource */
+router.get(
+  '/host-applications/stream',
+  authenticateAdminSse,
+  streamAdminHostApplications
 );
 
 router.get(

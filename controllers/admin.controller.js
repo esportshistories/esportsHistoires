@@ -1356,6 +1356,14 @@ const approveHostApplication = asyncHandler(async (req, res) => {
   application.adminId = adminId;
   await application.save();
 
+  const otherPendingBeforeReject = await HostApplication.find({
+    tournamentId: application.tournamentId,
+    _id: { $ne: application._id },
+    status: 'pending'
+  })
+    .select('_id hostId tournamentId')
+    .lean();
+
   // ✅ AUTO-REJECT: Reject all other pending applications for the same tournament
   // When one application is approved, all other pending applications are automatically rejected
   const rejectedCount = await HostApplication.updateMany(
@@ -1407,6 +1415,28 @@ const approveHostApplication = asyncHandler(async (req, res) => {
     }
   }
 
+  try {
+    const { broadcastHostApplicationStatusToHost } = require('../services/hostApplicationSse.service');
+    broadcastHostApplicationStatusToHost(application.hostId.toString(), {
+      type: 'approved',
+      applicationId: application._id.toString(),
+      tournamentId: application.tournamentId.toString(),
+      status: 'approved'
+    });
+    for (const p of otherPendingBeforeReject) {
+      broadcastHostApplicationStatusToHost(p.hostId.toString(), {
+        type: 'rejected',
+        applicationId: p._id.toString(),
+        tournamentId: p.tournamentId.toString(),
+        status: 'rejected',
+        reason: 'auto_rejected',
+        adminNotes: 'Automatically rejected: Another host application was approved for this tournament.'
+      });
+    }
+  } catch (sseErr) {
+    Logger.error('Host application SSE: approve broadcast failed', { message: sseErr?.message });
+  }
+
   res.success(HTTP_STATUS.OK, MESSAGES.SUCCESS.HOST_APPLICATION_APPROVED, {
     applicationId: application._id,
     tournamentId: application.tournamentId,
@@ -1440,6 +1470,19 @@ const rejectHostApplication = asyncHandler(async (req, res) => {
     application.adminNotes = adminNotes;
   }
   await application.save();
+
+  try {
+    const { broadcastHostApplicationStatusToHost } = require('../services/hostApplicationSse.service');
+    broadcastHostApplicationStatusToHost(application.hostId.toString(), {
+      type: 'rejected',
+      applicationId: application._id.toString(),
+      tournamentId: application.tournamentId.toString(),
+      status: 'rejected',
+      adminNotes: application.adminNotes || null
+    });
+  } catch (sseErr) {
+    Logger.error('Host application SSE: reject broadcast failed', { message: sseErr?.message });
+  }
 
   res.success(HTTP_STATUS.OK, MESSAGES.SUCCESS.HOST_APPLICATION_REJECTED, {
     applicationId: application._id,
@@ -2957,6 +3000,16 @@ const streamAdminDashboard = asyncHandler(async (req, res) => {
 });
 
 /**
+ * SSE: new host applications (Admin only).
+ * GET /api/admin/host-applications/stream
+ * Auth: Bearer or ?access_token= (for EventSource).
+ */
+const streamAdminHostApplications = asyncHandler(async (req, res) => {
+  const { attachAdminHostApplicationsSse } = require('../services/hostApplicationSse.service');
+  attachAdminHostApplicationsSse(req, res);
+});
+
+/**
  * Get financial analytics (Admin only)
  * GET /api/admin/analytics?period=daily|weekly|monthly
  */
@@ -3101,6 +3154,7 @@ module.exports = {
   sendCustomNotification,
   getDashboardStats,
   streamAdminDashboard,
+  streamAdminHostApplications,
   getAnalytics,
   getLobbyFinancialHistory,
   createOrganization,
