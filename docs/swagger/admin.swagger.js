@@ -773,6 +773,12 @@
  *           type: string
  *           enum: [user, host, admin, org_manager]
  *         description: Filter users by role (omit for all roles). Org managers include `managedOrganizations` when they own or manage an org.
+ *       - in: query
+ *         name: includeBlocked
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: When role=host, set true to include blocked hosts (admin moderation). Default excludes isBlocked hosts so assignment UIs do not show banned users.
  *     responses:
  *       200:
  *         description: Users retrieved successfully

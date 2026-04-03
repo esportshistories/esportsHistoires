@@ -619,6 +619,7 @@ const assignHost = asyncHandler(async (req, res) => {
  * - If role is NOT provided (ALL): Searches in entire database without role filter
  * - Search works on both name and email fields (case-insensitive)
  * - Role filter and search can be combined
+ * - role=host: Excludes isBlocked users by default (assign-host flows). Pass includeBlocked=true to list all hosts for moderation.
  */
 const listUsers = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
@@ -626,6 +627,8 @@ const listUsers = asyncHandler(async (req, res) => {
   // Support both 'search' and 'query' parameters (query is alias for search)
   const search = req.query.search || req.query.query || '';
   const role = req.query.role; // 'user', 'host', 'admin', 'org_manager', or undefined for ALL
+  const includeBlocked =
+    req.query.includeBlocked === 'true' || req.query.includeBlocked === '1';
   const skip = (page - 1) * limit;
 
   // Build search query
@@ -635,10 +638,15 @@ const listUsers = asyncHandler(async (req, res) => {
   if (role) {
     // Validate role value
     const validRoles = ['user', 'host', 'admin', 'org_manager'];
-    if (!validRoles.includes(role.toLowerCase())) {
+    const roleLower = role.toLowerCase();
+    if (!validRoles.includes(roleLower)) {
       return res.badRequest(`Invalid role. Must be one of: ${validRoles.join(', ')}`);
     }
-    searchQuery.role = role.toLowerCase();
+    searchQuery.role = roleLower;
+    // Blocked hosts must not appear in "available hosts" lists; same filter as getHostsForTournament
+    if (roleLower === 'host' && !includeBlocked) {
+      searchQuery.isBlocked = false;
+    }
   }
   
   // Add search filter for email or name (works within selected role if role is provided)
