@@ -117,7 +117,7 @@ const listAvailableTournaments = asyncHandler(async (req, res) => {
       // Room information (roomId and password) - visible to all users
       room: tournament.room || { roomId: null, password: null },
       // Attach lobby-specific rules so host sees exactly the same rules data as users
-      rules: getFilteredRules(tournament.mode, tournament.subMode),
+      rules: getFilteredRules(tournament.mode, tournament.subMode, tournament.game),
       // Application status - this is what frontend needs to show "Applied" button
       hasApplied: application !== null,
       applicationStatus: application ? application.status : null, // 'pending', 'approved', 'rejected', or null
@@ -427,7 +427,7 @@ const mapTournamentToDetails = (tournament) => {
     playersPerTeam,
     lobbyName: tournament.lobbyName || null,
     room: tournament.room || { roomId: null, password: null },
-    rules: getFilteredRules(tournament.mode, tournament.subMode)
+    rules: getFilteredRules(tournament.mode, tournament.subMode, tournament.game)
   };
 };
 

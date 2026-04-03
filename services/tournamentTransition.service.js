@@ -37,8 +37,9 @@ const buildUTCFromIST = (year, month, day, hour24, minute) => {
 
 const calculateStartDateTime = (date, startTime) => {
   if (!date || !startTime) return null;
-  const [time, period] = startTime.split(' ');
+  const [time, periodRaw] = startTime.split(' ');
   const [hours, minutes] = time.split(':').map(Number);
+  const period = String(periodRaw || '').trim().toUpperCase();
   let hour24 = hours;
   if (period === 'PM' && hours !== 12) {
     hour24 = hours + 12;

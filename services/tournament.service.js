@@ -5,7 +5,12 @@
 
 const mongoose = require('mongoose');
 const Tournament = require('../models/Tournament.model');
-const { GAME_MODES, MIN_TEAMS_FOR_START, POSITION_POINTS_TABLE } = require('../constants');
+const { MIN_TEAMS_FOR_START, POSITION_POINTS_TABLE } = require('../constants');
+const { parseAdminGameTitles } = require('../constants/gameCatalog');
+const {
+  getModeConfigForGame,
+  getCsTotalMatchesBounds
+} = require('../constants/gameLobbyProfiles');
 const Logger = require('../utils/logger');
 const orgWalletService = require('./orgWallet.service');
 
@@ -22,18 +27,8 @@ const toParticipantUserId = (p) => {
  * @param {string} subMode - Sub mode
  * @returns {Object} Mode configuration
  */
-const getModeConfig = (mode, subMode) => {
-  const modeConfig = GAME_MODES[mode];
-  if (!modeConfig) {
-    throw new Error(`Invalid game mode: ${mode}`);
-  }
-
-  const subModeConfig = modeConfig[subMode];
-  if (!subModeConfig) {
-    throw new Error(`Invalid sub-mode: ${subMode} for mode: ${mode}`);
-  }
-
-  return subModeConfig;
+const getModeConfig = (mode, subMode, gameTitle = 'Free Fire') => {
+  return getModeConfigForGame(gameTitle, mode, subMode);
 };
 
 /**
@@ -160,6 +155,28 @@ const getISTDateComponents = (date) => {
 };
 
 /**
+ * Validate YYYY-MM-DD is today or future in IST (wall calendar). Used by admin routes + service.
+ * @param {string} dateStr
+ * @throws {Error} if invalid or in the past (IST)
+ */
+const assertGenerateLobbiesDateAllowed = (dateStr) => {
+  const s = String(dateStr || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    throw new Error('date must be YYYY-MM-DD');
+  }
+  const [y, m, d] = s.split('-').map(Number);
+  const todayIST = getISTDateComponents(new Date());
+  if (
+    y < todayIST.year ||
+    (y === todayIST.year && m - 1 < todayIST.month) ||
+    (y === todayIST.year && m - 1 === todayIST.month && d < todayIST.day)
+  ) {
+    const tds = `${todayIST.year}-${String(todayIST.month + 1).padStart(2, '0')}-${String(todayIST.day).padStart(2, '0')}`;
+    throw new Error(`date cannot be in the past (IST). Today (IST): ${tds}`);
+  }
+};
+
+/**
  * Build a UTC Date that corresponds to a given IST calendar datetime.
  * Example: 2026‑01‑28 12:00 IST → 2026‑01‑28 06:30 UTC.
  *
@@ -187,9 +204,10 @@ const buildUTCFromIST = (year, month, day, hour24, minute) => {
 const calculateStartDateTime = (date, startTime) => {
   if (!date || !startTime) return null;
 
-  const [time, period] = startTime.split(' ');
+  const [time, periodRaw] = startTime.split(' ');
   const [hours, minutes] = time.split(':').map(Number);
-  
+  const period = String(periodRaw || '').trim().toUpperCase();
+
   let hour24 = hours;
   if (period === 'PM' && hours !== 12) {
     hour24 = hours + 12;
@@ -220,9 +238,10 @@ const calculateLockTime = (date, startTime) => {
  * @returns {boolean} True if time slot has passed, false otherwise
  */
 const isTimeSlotPassed = (timeSlot, targetDate) => {
-  const [time, period] = timeSlot.split(' ');
+  const [time, periodRaw] = timeSlot.split(' ');
   const [hours, minutes] = time.split(':').map(Number);
-  
+  const period = String(periodRaw || '').trim().toUpperCase();
+
   let hour24 = hours;
   if (period === 'PM' && hours !== 12) {
     hour24 = hours + 12;
@@ -238,92 +257,6 @@ const isTimeSlotPassed = (timeSlot, targetDate) => {
 };
 
 /**
- * Generate tournaments for next day
- * @returns {Promise<Array>} Array of created tournaments
- */
-const generateNextDayLobbies = async () => {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-
-  const timeSlots = ['12:00 PM', '3:00 PM', '6:00 PM', '9:00 PM'];
-  const tournamentData = [];
-
-  // Generate tournaments for each game mode and sub-mode
-  for (const [mode, subModes] of Object.entries(GAME_MODES)) {
-    for (const [subMode, config] of Object.entries(subModes)) {
-      for (const startTime of timeSlots) {
-        const lockTime = calculateLockTime(tomorrow, startTime);
-        
-        // Check existing lobbies with same parameters to determine lobby number
-        const existingLobbies = await Tournament.countDocuments({
-          date: tomorrow,
-          startTime,
-          mode,
-          subMode,
-          entryFee: config.entryFee,
-          region: 'Global'
-        });
-
-        // Calculate team stats and potential prize pool at creation time (same as generateLobbies)
-        const { playersPerTeam, maxTeams } = calculateTeamStats(subMode, config.maxPlayers);
-        const potentialTotalPrizePool = maxTeams * config.entryFee;
-        const potentialPrizePoolBreakdown = calculatePrizePoolBreakdown(potentialTotalPrizePool, mode, config.entryFee);
-
-        // Generate lobby name: "Lobby 1 75 10:15 PM" (includes entry fee and full time for easy identification)
-        const lobbyNumber = existingLobbies + 1;
-        const lobbyName = `Lobby ${lobbyNumber} ${config.entryFee} ${startTime}`;
-
-        // IMPORTANT: Each lobby is created without a host. Hosts must apply separately for each tournament.
-        // No automatic host assignment - each lobby requires individual host application.
-        // CS: 1 match only - host publishes single final result (7 or 13 rounds)
-        const totalMatches = mode === 'CS' ? 1 : 6;
-        tournamentData.push({
-          game: 'Free Fire',
-          mode,
-          subMode,
-          entryFee: config.entryFee,
-          maxPlayers: config.maxPlayers,
-          date: tomorrow,
-          startTime,
-          lockTime,
-          participants: [],
-          hostId: null, // Explicitly set to null - hosts must apply separately for each lobby
-          room: {
-            roomId: null,
-            password: null
-          },
-          prizePool: 0, // Will be updated when participants join
-          totalMatches,
-          // Store potential prize pool breakdown at creation time
-          platformFees: {
-            totalPrizePool: 0, // Current (will update when participants join)
-            platformFee: 0,
-            hostFee: 0,
-            casterFee: 0,
-            totalFees: 0,
-            winnerPrizePool: 0,
-            // Store potential prize pool breakdown for get APIs
-            potentialTotalPrizePool: potentialTotalPrizePool,
-            potentialPlatformFee: potentialPrizePoolBreakdown.platformFee,
-            potentialHostFee: potentialPrizePoolBreakdown.hostFee,
-            potentialCasterFee: potentialPrizePoolBreakdown.casterFee,
-            potentialTotalFees: potentialPrizePoolBreakdown.totalFees,
-            potentialWinnerPrizePool: potentialPrizePoolBreakdown.winnerPrizePool
-          },
-          status: 'upcoming',
-          region: 'Global',
-          lobbyName: lobbyName,
-          results: []
-        });
-      }
-    }
-  }
-
-  return tournamentData.length > 0 ? await Tournament.insertMany(tournamentData) : [];
-};
-
-/**
  * Generate tournaments with custom parameters
  * @param {Object} options - Generation options
  * @param {string} options.date - Date in ISO format (YYYY-MM-DD) or Date object
@@ -334,45 +267,54 @@ const generateNextDayLobbies = async () => {
  *   - For BR: ['solo', 'duo', 'squad'] (required)
  *   - For LW: ['solo', 'duo', 'squad', '1v1', '2v2'] (optional - if not provided, defaults to ['1v1']. If '1v1' is selected, '2v2' is automatically included)
  * @param {Array<number>} options.entryFees - Array of entry fees [25, 50, 75, 100, 200, 300] (optional, defaults to mode config)
- * @param {string} options.region - 'Asia' or 'Global' (default: 'Global')
- * @returns {Promise<Array>} Array of created tournaments
+ * @param {string|string[]} [options.game] - Single catalog title or slug (optional; default Free Fire)
+ * @param {string[]} [options.games] - Multiple games (optional)
+ * @param {string} [options.lobbyName] - Optional label; subMode, entry fee and time are appended for uniqueness
+ * @param {number} [options.totalMatches] - CS only: must be 1 if sent (TDM/Clash = one contest)
+ * @returns {Promise<{ tournaments: Array, skippedTimeSlots: Array<string> }>}
  */
 const generateLobbies = async (options) => {
-  const { date, timeSlots, mode, subModes, entryFees, region = 'Global' } = options;
+  const {
+    date,
+    timeSlots,
+    mode,
+    subModes,
+    entryFees,
+    lobbyName: lobbyNameOpt
+  } = options;
 
-  // Validate date
+  const region = 'Global';
+
+  const gameTitles = parseAdminGameTitles(options.game ?? options.games);
+
+  // Validate date (YYYY-MM-DD); not in the past vs IST calendar; store UTC midnight for that calendar day
   if (!date) {
     throw new Error('date is required. Must be a valid date in ISO format (YYYY-MM-DD)');
   }
 
+  let year;
+  let month;
+  let day;
   let targetDate;
+
   if (typeof date === 'string') {
-    targetDate = new Date(date);
-    if (isNaN(targetDate.getTime())) {
-      throw new Error('Invalid date format. Must be a valid date in ISO format (YYYY-MM-DD)');
+    const s = date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      throw new Error('Invalid date format. Use YYYY-MM-DD');
     }
+    assertGenerateLobbiesDateAllowed(s);
+    [year, month, day] = s.split('-').map(Number);
+    targetDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
   } else if (date instanceof Date) {
-    targetDate = new Date(date);
+    if (isNaN(date.getTime())) {
+      throw new Error('Invalid date object');
+    }
+    const s = date.toISOString().split('T')[0];
+    assertGenerateLobbiesDateAllowed(s);
+    [year, month, day] = s.split('-').map(Number);
+    targetDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
   } else {
     throw new Error('Invalid date. Must be a date string (YYYY-MM-DD) or Date object');
-  }
-
-  // Set time to midnight in UTC to ensure consistent date storage in MongoDB
-  // MongoDB stores dates in UTC, so we need to normalize to UTC to avoid timezone issues
-  // This ensures tournament.date field matches exactly when filtering
-  const dateStr = targetDate.toISOString().split('T')[0]; // Get YYYY-MM-DD in UTC
-  const [year, month, day] = dateStr.split('-').map(Number);
-  targetDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0)); // UTC midnight
-
-  // Validate that date is not in the past (compare in UTC)
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-  const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
-  const todayUTC = new Date(Date.UTC(todayYear, todayMonth - 1, todayDay, 0, 0, 0, 0));
-  
-  if (targetDate < todayUTC) {
-    const selectedDateStr = targetDate.toISOString().split('T')[0];
-    throw new Error(`Date cannot be in the past. Selected date: ${selectedDateStr}, Today: ${todayStr}`);
   }
 
   // Validate mode
@@ -428,11 +370,6 @@ const generateLobbies = async (options) => {
     }
   }
 
-  // Validate region
-  if (region !== 'Asia' && region !== 'Global') {
-    throw new Error('Invalid region. Must be "Asia" or "Global"');
-  }
-
   // Validate entry fees if provided
   const VALID_ENTRY_FEES = [25, 50, 75, 100, 150, 200, 300];
   let validEntryFees = [];
@@ -445,9 +382,11 @@ const generateLobbies = async (options) => {
     validEntryFees = entryFees.map(f => Number(f));
   }
 
-  // Check if selected date is today
-  // Both dates are already set to midnight, so direct comparison works
-  const isToday = targetDate.getTime() === today.getTime();
+  const todayIST = getISTDateComponents(new Date());
+  const isToday =
+    year === todayIST.year &&
+    month - 1 === todayIST.month &&
+    day === todayIST.day;
 
   // Filter out passed time slots if date is today
   // For future dates, all time slots are valid
@@ -468,98 +407,118 @@ const generateLobbies = async (options) => {
   // For future dates: all time slots are valid, no need to check
 
   const tournamentData = [];
-  
-  // Track lobby counts per combination to handle multiple lobbies in same request
-  // Key format: `${date}-${startTime}-${mode}-${subMode}-${entryFee}-${region}`
-  const lobbyCountMap = new Map();
+  const customLobbyBase =
+    lobbyNameOpt != null && String(lobbyNameOpt).trim() !== '' ? String(lobbyNameOpt).trim() : null;
 
-  // Generate tournaments for each sub-mode, time slot, and entry fee combination
-  for (const subMode of finalSubModes) {
-    const config = getModeConfig(mode, subMode);
-    
-    // Use entryFees if provided, otherwise use default from config
-    const feesToUse = validEntryFees.length > 0 ? validEntryFees : [config.entryFee];
-    
-    for (const entryFee of feesToUse) {
-      // Use validTimeSlots instead of timeSlots to only process valid time slots
-      for (const startTime of validTimeSlots) {
-        // Create a unique key for this combination
-        const dateKey = targetDate.toISOString().split('T')[0];
-        const combinationKey = `${dateKey}-${startTime}-${mode}-${subMode}-${entryFee}-${region}`;
-        
-        // Check existing lobbies with same parameters to determine starting lobby number
-        // Only check once per combination, then increment for subsequent lobbies in same request
-        if (!lobbyCountMap.has(combinationKey)) {
-          const existingLobbies = await Tournament.countDocuments({
-            date: targetDate,
-            startTime,
+  for (const gameTitle of gameTitles) {
+    const lobbyCountMap = new Map();
+
+    for (const subMode of finalSubModes) {
+      const config = getModeConfig(mode, subMode, gameTitle);
+
+      const feesToUse = validEntryFees.length > 0 ? validEntryFees : [config.entryFee];
+
+      for (const entryFee of feesToUse) {
+        for (const startTime of validTimeSlots) {
+          const dateKey = targetDate.toISOString().split('T')[0];
+          const combinationKey = `${dateKey}-${startTime}-${mode}-${subMode}-${entryFee}-${region}-${gameTitle}`;
+
+          if (!lobbyCountMap.has(combinationKey)) {
+            const existingLobbies = await Tournament.countDocuments({
+              date: targetDate,
+              startTime,
+              mode,
+              subMode,
+              entryFee,
+              region,
+              game: gameTitle
+            });
+            lobbyCountMap.set(combinationKey, existingLobbies);
+          }
+
+          const currentCount = lobbyCountMap.get(combinationKey);
+          const lobbyNumber = currentCount + 1;
+          lobbyCountMap.set(combinationKey, lobbyNumber);
+
+          const lockTime = calculateLockTime(targetDate, startTime);
+
+          const { maxTeams } = calculateTeamStats(subMode, config.maxPlayers);
+          const potentialTotalPrizePool = maxTeams * entryFee;
+          const potentialPrizePoolBreakdown = calculatePrizePoolBreakdown(
+            potentialTotalPrizePool,
+            mode,
+            entryFee
+          );
+
+          const autoLobbyName = `Lobby ${lobbyNumber} ${entryFee} ${startTime}`;
+          const lobbyName = customLobbyBase
+            ? `${customLobbyBase} · ${subMode} · ${entryFee} · ${startTime}`
+            : autoLobbyName;
+
+          let totalMatches;
+          if (mode === 'CS') {
+            const bounds = getCsTotalMatchesBounds(gameTitle);
+            const reqTm =
+              options.totalMatches != null && options.totalMatches !== ''
+                ? Number(options.totalMatches)
+                : null;
+            if (reqTm != null) {
+              if (
+                !Number.isInteger(reqTm) ||
+                reqTm < bounds.min ||
+                reqTm > bounds.max
+              ) {
+                throw new Error(
+                  `totalMatches for ${gameTitle} (CS/TDM) must be an integer ${bounds.min}-${bounds.max}`
+                );
+              }
+              totalMatches = reqTm;
+            } else {
+              totalMatches =
+                config.defaultTotalMatches != null
+                  ? config.defaultTotalMatches
+                  : bounds.defaultMatches;
+            }
+          } else {
+            totalMatches = 6;
+          }
+          tournamentData.push({
+            game: gameTitle,
             mode,
             subMode,
-            entryFee,
-            region
+            entryFee: entryFee,
+            maxPlayers: config.maxPlayers,
+            date: targetDate,
+            startTime,
+            lockTime,
+            participants: [],
+            hostId: null,
+            room: {
+              roomId: null,
+              password: null
+            },
+            prizePool: 0,
+            totalMatches,
+            platformFees: {
+              totalPrizePool: 0,
+              platformFee: 0,
+              hostFee: 0,
+              casterFee: 0,
+              totalFees: 0,
+              winnerPrizePool: 0,
+              potentialTotalPrizePool: potentialTotalPrizePool,
+              potentialPlatformFee: potentialPrizePoolBreakdown.platformFee,
+              potentialHostFee: potentialPrizePoolBreakdown.hostFee,
+              potentialCasterFee: potentialPrizePoolBreakdown.casterFee,
+              potentialTotalFees: potentialPrizePoolBreakdown.totalFees,
+              potentialWinnerPrizePool: potentialPrizePoolBreakdown.winnerPrizePool
+            },
+            status: 'upcoming',
+            region,
+            lobbyName,
+            results: []
           });
-          lobbyCountMap.set(combinationKey, existingLobbies);
         }
-        
-        // Get current count and increment for this lobby
-        const currentCount = lobbyCountMap.get(combinationKey);
-        const lobbyNumber = currentCount + 1;
-        lobbyCountMap.set(combinationKey, lobbyNumber);
-
-        const lockTime = calculateLockTime(targetDate, startTime);
-        
-        // Calculate team stats and potential prize pool at creation time
-        // This will be stored and used by all get APIs - no need to recalculate
-        const { playersPerTeam, maxTeams } = calculateTeamStats(subMode, config.maxPlayers);
-        const potentialTotalPrizePool = maxTeams * entryFee;
-        const potentialPrizePoolBreakdown = calculatePrizePoolBreakdown(potentialTotalPrizePool, mode, entryFee);
-
-        // Generate lobby name: "Lobby 1 75 10:15 PM" (includes entry fee and full time for easy identification)
-        const lobbyName = `Lobby ${lobbyNumber} ${entryFee} ${startTime}`;
-
-        // IMPORTANT: Each lobby is created without a host. Hosts must apply separately for each tournament.
-        // No automatic host assignment - each lobby requires individual host application.
-        // CS: 1 match only - host publishes single final result (7 or 13 rounds)
-        const totalMatches = mode === 'CS' ? 1 : 6;
-        tournamentData.push({
-          game: 'Free Fire',
-          mode,
-          subMode,
-          entryFee: entryFee,
-          maxPlayers: config.maxPlayers,
-          date: targetDate,
-          startTime,
-          lockTime,
-          participants: [],
-          hostId: null, // Explicitly set to null - hosts must apply separately for each lobby
-          room: {
-            roomId: null,
-            password: null
-          },
-          prizePool: 0, // Will be updated when participants join
-          totalMatches,
-          // Store potential prize pool breakdown at creation time
-          // Get APIs will use this stored data instead of recalculating
-          platformFees: {
-            totalPrizePool: 0, // Current (will update when participants join)
-            platformFee: 0,
-            hostFee: 0,
-            casterFee: 0,
-            totalFees: 0,
-            winnerPrizePool: 0,
-            // Store potential prize pool breakdown for get APIs
-            potentialTotalPrizePool: potentialTotalPrizePool,
-            potentialPlatformFee: potentialPrizePoolBreakdown.platformFee,
-            potentialHostFee: potentialPrizePoolBreakdown.hostFee,
-            potentialCasterFee: potentialPrizePoolBreakdown.casterFee,
-            potentialTotalFees: potentialPrizePoolBreakdown.totalFees,
-            potentialWinnerPrizePool: potentialPrizePoolBreakdown.winnerPrizePool
-          },
-          status: 'upcoming',
-          region,
-          lobbyName: lobbyName,
-          results: []
-        });
       }
     }
   }
@@ -2144,7 +2103,6 @@ module.exports = {
   // Reusable calculation functions
   calculateTeamStats,
   calculatePrizePoolBreakdown,
-  generateNextDayLobbies,
   generateLobbies,
   updatePrizePool,
   generateRewards,
@@ -2156,6 +2114,7 @@ module.exports = {
   joinTournament,
   getUpcomingTournaments,
   getTournamentsByStatus,
+  assertGenerateLobbiesDateAllowed,
   getJoinedTournaments,
   getTournamentHistory,
   getTournamentDetails,

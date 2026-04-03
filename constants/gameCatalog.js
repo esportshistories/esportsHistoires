@@ -158,6 +158,101 @@ const parseAdminGameTitles = (games) => {
   return out;
 };
 
+/**
+ * Full catalogue for admin UI (pick any title when creating lobbies).
+ * @returns {{ games: Array<{ title: string, platform: 'mobile'|'pc', slug: string }> }}
+ */
+/**
+ * If the user has any followed games, the tournament's game must match one of them.
+ * If they have no followed games set, join is allowed (legacy / open profile).
+ * @param {Array<{ platform: string, game: string }>} followedGroups from getUserSelectedGameGroups
+ * @param {string} tournamentGame stored Tournament.game
+ */
+const assertUserFollowsGameForLobby = (followedGroups, tournamentGame) => {
+  if (!followedGroups || followedGroups.length === 0) return;
+  const title = resolveAnyGameTitle(tournamentGame);
+  if (!title) {
+    throw new Error('This lobby has an unsupported game configuration');
+  }
+  const ok = followedGroups.some((g) => matchesGameName(g.game, title));
+  if (!ok) {
+    throw new Error(
+      `Add "${title}" to your followed games in profile to join this lobby`
+    );
+  }
+};
+
+const buildAdminGamesCatalogResponse = () => ({
+  games: [
+    ...GAME_OPTIONS.mobile.map((title) => ({
+      title,
+      platform: 'mobile',
+      slug: slugifyGameName(title)
+    })),
+    ...GAME_OPTIONS.pc.map((title) => ({
+      title,
+      platform: 'pc',
+      slug: slugifyGameName(title)
+    }))
+  ]
+});
+
+/**
+ * Merge static catalogue with raw game strings seen in DB (tournaments, profiles).
+ * Dedupes by normalized game key; prefers canonical titles from GAME_OPTIONS when resolvable.
+ * @param {Array<{ title: string, platform: 'mobile'|'pc', slug: string }>} staticGames
+ * @param {Array<{ title: string, platform?: 'mobile'|'pc'|null }>} additionalEntries
+ * @returns {{ games: Array<{ title: string, platform: 'mobile'|'pc', slug: string }> }}
+ */
+const mergeAdminCatalogGames = (staticGames, additionalEntries) => {
+  const normKey = (title) =>
+    normalizeGameMatchKeysForDb([title])[0] || slugifyGameName(title);
+
+  const byKey = new Map();
+  for (const g of staticGames) {
+    byKey.set(normKey(g.title), { title: g.title, platform: g.platform, slug: g.slug });
+  }
+
+  for (const { title: raw, platform: hint } of additionalEntries) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) continue;
+
+    const resolved = resolveAnyGameTitle(trimmed);
+    const displayTitle = resolved || trimmed;
+    const key = normKey(displayTitle);
+
+    const inferred =
+      canonicalizeGameNameFromAnyPlatform(displayTitle) ||
+      slugToCanonicalGame(slugifyGameName(trimmed));
+    const platform =
+      hint === 'mobile' || hint === 'pc'
+        ? hint
+        : inferred
+          ? inferred.platform
+          : 'mobile';
+
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        title: displayTitle,
+        platform,
+        slug: slugifyGameName(displayTitle)
+      });
+    } else {
+      const cur = byKey.get(key);
+      if (cur.platform === 'mobile' && platform === 'pc') {
+        byKey.set(key, { ...cur, platform: 'pc' });
+      }
+    }
+  }
+
+  const games = [...byKey.values()].sort((a, b) => {
+    if (a.platform !== b.platform) return a.platform.localeCompare(b.platform);
+    return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+  });
+
+  return { games };
+};
+
 module.exports = {
   GAME_OPTIONS,
   GAME_SLUG_ALIASES,
@@ -169,5 +264,8 @@ module.exports = {
   resolveAnyGameTitle,
   normalizeGameMatchKeysForDb,
   matchesGameName,
-  parseAdminGameTitles
+  parseAdminGameTitles,
+  buildAdminGamesCatalogResponse,
+  mergeAdminCatalogGames,
+  assertUserFollowsGameForLobby
 };

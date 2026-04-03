@@ -175,7 +175,12 @@ router.put(
       .isLength({ min: 2, max: 100 })
       .withMessage('Name must be between 2 and 100 characters'),
     body('phoneNumber')
-      .optional()
+      .optional({ checkFalsy: true })
+      .trim()
+      .matches(/^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,9}$/)
+      .withMessage('Please provide a valid phone number'),
+    body('phone')
+      .optional({ checkFalsy: true })
       .trim()
       .matches(/^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,9}$/)
       .withMessage('Please provide a valid phone number'),

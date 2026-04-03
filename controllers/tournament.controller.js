@@ -10,7 +10,13 @@ const tournamentService = require('../services/tournament.service');
 const walletService = require('../services/wallet.service');
 const Logger = require('../utils/logger');
 const { getSpecialTournamentsForList } = require('../services/tournament.service');
-const { resolveAnyGameTitle, normalizeGameMatchKeysForDb, matchesGameName } = require('../constants/gameCatalog');
+const {
+  resolveAnyGameTitle,
+  normalizeGameMatchKeysForDb,
+  matchesGameName,
+  assertUserFollowsGameForLobby
+} = require('../constants/gameCatalog');
+const { getUserSelectedGameGroups } = require('./profile.controller');
 
 // SSE clients: each entry is { res, gameMatchKeys } — same scope rules as GET /api/tournament/list
 const sseTournamentListClients = new Set();
@@ -31,8 +37,9 @@ const broadcastTournamentListUpdate = (payload) => {
   const data = `event: update\ndata:${JSON.stringify(payload)}\n\n`;
   for (const client of sseTournamentListClients) {
     const { res, gameMatchKeys } = client;
-    if (!gameMatchKeys.length) continue;
-    if (!gameMatchKeys.includes(payloadKey)) continue;
+    const keys = Array.isArray(gameMatchKeys) ? gameMatchKeys : [];
+    if (!keys.length) continue;
+    if (!keys.includes(payloadKey)) continue;
     try {
       res.write(data);
     } catch (err) {
@@ -603,7 +610,17 @@ const joinTournament = asyncHandler(async (req, res) => {
   if (now >= startDateTime) {
     return res.badRequest('Cannot join tournament. Tournament has gone live. Join option is now closed.');
   }
-  
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.unauthorized(MESSAGES.ERROR.USER_NOT_FOUND);
+  }
+  try {
+    assertUserFollowsGameForLobby(getUserSelectedGameGroups(user), tournament.game);
+  } catch (e) {
+    return res.badRequest(e.message);
+  }
+
   // Validate tournament date - check if tournament date is in the past
   const tournamentDate = new Date(tournament.date);
   tournamentDate.setHours(0, 0, 0, 0);
@@ -641,16 +658,16 @@ const joinTournament = asyncHandler(async (req, res) => {
     return res.badRequest(MESSAGES.ERROR.TOURNAMENT_FULL);
   }
 
-  // Clash Squad: only 2 teams allowed. Enforce even if maxPlayers was changed elsewhere.
-  const CS_MAX_TEAMS = 2;
-  if (tournament.mode === 'CS' && (tournament.participants?.length || 0) >= CS_MAX_TEAMS) {
+  if (
+    tournament.mode === 'CS' &&
+    (tournament.participants?.length || 0) >= tournament.maxPlayers
+  ) {
     return res.badRequest(MESSAGES.ERROR.TOURNAMENT_FULL);
   }
 
   // Prepare team data (optional for backward compatibility)
   let teamData = null;
   try {
-    const user = await User.findById(userId);
     const finalTeamName = (teamName && String(teamName).trim().length > 0)
       ? String(teamName).trim()
       : (user && (user.ign || user.name)) || 'Team';
@@ -1257,6 +1274,7 @@ const joinTeam = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  broadcastTournamentListUpdate,
   getTournamentList,
   streamTournamentList,
   getJoinedTournaments,

@@ -4,6 +4,7 @@
  */
 
 const { HTTP_STATUS, MESSAGES } = require('../constants');
+const { GAME_OPTIONS } = require('../constants/gameCatalog');
 const { ResponseHelper } = require('./response.helper');
 
 /**
@@ -33,6 +34,25 @@ const checkEmailVerified = (res, user) => {
     return false;
   }
   return true;
+};
+
+/**
+ * Build a full followed-games list from static catalogue (used for admin defaults).
+ * @returns {Array<{ platform: string, game: string, uid: null, selected: boolean }>}
+ */
+const buildAllGamesFollowed = () => {
+  const out = [];
+  for (const platform of ['mobile', 'pc']) {
+    for (const game of GAME_OPTIONS[platform] || []) {
+      out.push({
+        platform,
+        game,
+        uid: null,
+        selected: true
+      });
+    }
+  }
+  return out;
 };
 
 /**
@@ -93,6 +113,13 @@ const formatPersonalityProfilesForAuth = (list) => {
  */
 const formatUserData = (user) => {
   const gp = user.gamePreference;
+  let followedGames = formatFollowedGamesForAuth(gp?.followedGames);
+
+  // Admin UX: if admin has no explicit followedGames, treat all catalogue games as followed by default.
+  if (user.role === 'admin' && followedGames.length === 0) {
+    followedGames = buildAllGamesFollowed();
+  }
+
   return {
     userId: user._id,
     email: user.email,
@@ -100,7 +127,7 @@ const formatUserData = (user) => {
     role: user.role,
     isEmailVerified: user.isEmailVerified,
     twoFactorEnabled: Boolean(user.twoFactor?.enabled),
-    followedGames: formatFollowedGamesForAuth(gp?.followedGames),
+    followedGames,
     organizationProfiles: formatOrganizationProfilesForAuth(gp?.selectedEsportsOrganizations),
     personalityProfiles: formatPersonalityProfilesForAuth(gp?.selectedEsportsPersonalities)
   };

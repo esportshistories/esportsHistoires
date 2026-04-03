@@ -10,6 +10,7 @@ const { HTTP_STATUS, MESSAGES, GAME_MODES } = require('../constants');
 const tournamentService = require('../services/tournament.service');
 const walletService = require('../services/wallet.service');
 const Tournament = require('../models/Tournament.model');
+const SpecialTournament = require('../models/SpecialTournament.model');
 const Organization = require('../models/Organization.model');
 const User = require('../models/User.model');
 const HostApplication = require('../models/HostApplication.model');
@@ -20,6 +21,10 @@ const {
   normalizeWalletHistoryDoc,
   normalizeWalletHistoryList
 } = require('../utils/walletHistoryResponse');
+const {
+  buildAdminGamesCatalogResponse,
+  mergeAdminCatalogGames
+} = require('../constants/gameCatalog');
 
 /**
  * Admin Login
@@ -126,65 +131,65 @@ const adminLogin = asyncHandler(async (req, res) => {
 });
 
 /**
- * Generate next day lobbies
- * POST /api/admin/generate-next-day-lobbies
+ * GET /api/admin/games/catalog
+ * Static catalogue plus any distinct game strings from tournaments, special tournaments, and user profiles.
  */
-const generateNextDayLobbies = asyncHandler(async (req, res) => {
-  const tournaments = await tournamentService.generateNextDayLobbies();
-  
-  // Previously, new tournaments were broadcast only to admin via WebSocket.
-  // For lobby list auto-update, we now also (or only) use SSE so clients on
-  // /tournament/list can see newly created lobbies without reload.
-  try {
-    const { sendNewLobbyCreatedNotification } = require('../services/notification.service');
-    const { calculateTeamStats } = require('../services/tournament.service');
-    const { broadcastTournamentListUpdate } = require('./tournament.controller');
+const getAdminGamesCatalog = asyncHandler(async (req, res) => {
+  const base = buildAdminGamesCatalogResponse();
 
-    tournaments.forEach((t) => {
-      const { playersPerTeam, maxTeams } = calculateTeamStats(t.subMode, t.maxPlayers);
+  const [tournamentGames, specialGames, userGameRows] = await Promise.all([
+    Tournament.distinct('game', { game: { $nin: [null, ''] } }),
+    SpecialTournament.distinct('game', { game: { $nin: [null, ''] } }),
+    User.aggregate([
+      {
+        $project: {
+          pairs: {
+            $concatArrays: [
+              {
+                $cond: {
+                  if: {
+                    $and: [
+                      { $ne: [{ $ifNull: ['$gamePreference.game', ''] }, ''] }
+                    ]
+                  },
+                  then: [
+                    {
+                      game: '$gamePreference.game',
+                      platform: '$gamePreference.platform'
+                    }
+                  ],
+                  else: []
+                }
+              },
+              {
+                $map: {
+                  input: { $ifNull: ['$gamePreference.followedGames', []] },
+                  as: 'f',
+                  in: { game: '$$f.game', platform: '$$f.platform' }
+                }
+              }
+            ]
+          }
+        }
+      },
+      { $unwind: '$pairs' },
+      { $match: { 'pairs.game': { $nin: [null, ''] } } },
+      { $group: { _id: { game: '$pairs.game', platform: '$pairs.platform' } } }
+    ])
+  ]);
 
-      broadcastTournamentListUpdate({
-        type: 'created',
-        tournamentId: t._id.toString(),
-        game: t.game,
-        mode: t.mode,
-        subMode: t.subMode,
-        date: t.date,
-        startTime: t.startTime,
-        entryFee: t.entryFee,
-        maxPlayers: t.maxPlayers,
-        maxTeams,
-        playersPerTeam,
-        status: t.status,
-        region: t.region || 'Global',
-        lobbyName: t.lobbyName || null,
-        participantCount: (t.participants || []).length,
-        prizePool: t.platformFees?.potentialWinnerPrizePool || 0
-      });
+  const additional = [];
+  for (const g of tournamentGames) additional.push({ title: g, platform: null });
+  for (const g of specialGames) additional.push({ title: g, platform: null });
+  for (const row of userGameRows) {
+    additional.push({
+      title: row._id.game,
+      platform: row._id.platform || null
     });
-
-    sendNewLobbyCreatedNotification(tournaments);
-    Logger.info('Broadcasted new tournament(s) via SSE for lobby list', { count: tournaments.length });
-  } catch (err) {
-    // Log error but don't fail the request
-    Logger.error('Error broadcasting new tournaments via SSE', { errName: err.name });
   }
-  
-  res.success(HTTP_STATUS.CREATED, MESSAGES.SUCCESS.TOURNAMENTS_GENERATED, {
-    tournaments: tournaments.map(t => ({
-      id: t._id,
-      game: t.game,
-      mode: t.mode,
-      subMode: t.subMode,
-      date: t.date,
-      startTime: t.startTime,
-      entryFee: t.entryFee,
-      maxPlayers: t.maxPlayers,
-      region: t.region || 'Global',
-      lobbyName: t.lobbyName || null
-    })),
-    total: tournaments.length
-  });
+
+  const data = mergeAdminCatalogGames(base.games, additional);
+  res.success(HTTP_STATUS.OK, 'Games catalog', data);
 });
 
 /**
@@ -201,10 +206,12 @@ const generateNextDayLobbies = asyncHandler(async (req, res) => {
  *   - For LW: ['solo', 'duo', 'squad', '1v1', '2v2'] (optional - if not provided, defaults to ['1v1']. If '1v1' is selected, '2v2' is automatically included)
  * - price: Single entry fee value (optional, for single price)
  * - entryFees: Array of entry fees [25, 50, 75, 100, 200, 300] (optional, defaults to mode config)
- * - region: 'Asia' or 'Global' (optional, default: 'Global')
+ * - game / games: catalogue title or slug (optional; default Free Fire). Use GET /api/admin/games/catalog.
+ * - lobbyName: optional display prefix; subMode, fee and time are appended for uniqueness.
+ * - totalMatches: CS only — always 1 (or omit); TDM is still 2 teams, not multi-match bracket.
  */
 const generateLobbies = asyncHandler(async (req, res) => {
-  const { date, timeSlots, mode, subModes, price, entryFees, region } = req.body;
+  const { date, timeSlots, mode, subModes, price, entryFees, game, games, lobbyName, totalMatches } = req.body;
   
   // Support both 'price' (single value) and 'entryFees' (array) for backward compatibility
   // If 'price' is provided, convert it to 'entryFees' array
@@ -255,7 +262,10 @@ const generateLobbies = asyncHandler(async (req, res) => {
       mode,
       subModes: finalSubModes,
       entryFees: finalEntryFees,
-      region: region || 'Global'
+      game,
+      games,
+      lobbyName,
+      totalMatches
     });
 
     const { tournaments, skippedTimeSlots } = result;
@@ -293,7 +303,11 @@ const generateLobbies = asyncHandler(async (req, res) => {
       Logger.info('Broadcasted new tournament(s) via SSE for lobby list', { count: tournaments.length });
     } catch (err) {
       // Log error but don't fail the request
-      Logger.error('Error broadcasting new tournaments via SSE', { errName: err.name });
+      Logger.error('Error broadcasting new tournaments via SSE', {
+        errName: err?.name,
+        message: err?.message,
+        stack: err?.stack
+      });
     }
 
     // Use stored potential prize pool values from tournament creation (already calculated and stored)
@@ -1270,18 +1284,27 @@ const listHostApplications = asyncHandler(async (req, res) => {
   const total = await HostApplication.countDocuments(query);
 
   // Get applications with pagination
-  // IMPORTANT: Filter out applications for deleted tournaments (tournamentId will be null if tournament was deleted)
+  // IMPORTANT:
+  // - Filter out applications for deleted tournaments (tournamentId will be null if tournament was deleted)
+  // - Filter out applications from blocked hosts (hostId.isBlocked === true)
   const applications = await HostApplication.find(query)
     .populate('tournamentId', 'game mode subMode date startTime entryFee maxPlayers')
-    .populate('hostId', 'name email')
+    .populate('hostId', 'name email isBlocked')
     .populate('adminId', 'name email')
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
     .lean();
   
-  // Filter out applications for deleted tournaments (tournamentId will be null after populate if tournament was deleted)
-  const validApplications = applications.filter(app => app.tournamentId !== null);
+  // Filter out:
+  // - applications for deleted tournaments (tournamentId will be null after populate if tournament was deleted)
+  // - applications where host user is blocked
+  const validApplications = applications.filter(app => {
+    const hasTournament = app.tournamentId !== null;
+    const host = app.hostId;
+    const hostNotBlocked = host && host.isBlocked !== true;
+    return hasTournament && hostNotBlocked;
+  });
 
   res.success(HTTP_STATUS.OK, MESSAGES.SUCCESS.HOST_APPLICATIONS_RETRIEVED, {
     applications: validApplications, // Only applications for existing tournaments
@@ -1309,6 +1332,15 @@ const approveHostApplication = asyncHandler(async (req, res) => {
 
   if (application.status !== 'pending') {
     return res.badRequest('Application is not pending');
+  }
+
+  // Do not allow approving applications for blocked hosts.
+  const hostUser = await User.findById(application.hostId).select('isBlocked');
+  if (!hostUser) {
+    return res.badRequest('Host user not found for this application');
+  }
+  if (hostUser.isBlocked) {
+    return res.badRequest('Cannot approve application: host user is blocked. Please unblock the host first.');
   }
 
   // Update application status
@@ -1421,6 +1453,7 @@ const listTournaments = asyncHandler(async (req, res) => {
   const date = req.query.date || null; // Specific date filter (YYYY-MM-DD)
   const subMode = req.query.subMode || null; // Filter by solo, duo, squad
   const mode = req.query.mode || null; // Filter by CS, BR, LW
+  const gameFilterRaw = req.query.game || null; // Optional: filter by one or more games (comma-separated)
   
   // Validate status
   if (!['upcoming', 'live', 'completed', 'pendingResult', 'cancelled'].includes(status)) {
@@ -1443,15 +1476,39 @@ const listTournaments = asyncHandler(async (req, res) => {
   }
   
   const tournaments = await tournamentService.getTournamentsByStatus(status, fromDate, toDate, date, subMode, mode);
+
+  // Optional: filter by game at controller level for admin listing.
+  // Accepts ?game=Free Fire or ?game=free-fire,pubg (comma-separated), case-insensitive match on stored tournament.game.
+  let filteredTournaments = tournaments;
+  if (gameFilterRaw) {
+    const normalizeGame = (value) =>
+      String(value || '')
+        .toLowerCase()
+        .replace(/\s+/g, '') // remove spaces, so "free fire" -> "freefire"
+        .replace(/-/g, ''); // remove dashes, so "free-fire" -> "freefire"
+
+    const requestedGames = String(gameFilterRaw)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(normalizeGame);
+
+    if (requestedGames.length) {
+      filteredTournaments = tournaments.filter((t) =>
+        requestedGames.includes(normalizeGame(t.game))
+      );
+    }
+  }
   
   res.success(HTTP_STATUS.OK, MESSAGES.SUCCESS.TOURNAMENTS_RETRIEVED, {
-    tournaments,
-    total: tournaments.length,
+    tournaments: filteredTournaments,
+    total: filteredTournaments.length,
     filters: {
       status,
       date: date || null,
       subMode: subMode || null,
-      mode: mode || null
+      mode: mode || null,
+      game: gameFilterRaw || null
     }
   });
 });
@@ -1525,9 +1582,14 @@ const editTournament = asyncHandler(async (req, res) => {
     if (maxPlayersNum < 1) {
       return res.badRequest('maxPlayers must be at least 1');
     }
-    // Clash Squad: only 2 teams allowed
-    if (tournament.mode === 'CS' && maxPlayersNum !== 2) {
-      return res.badRequest('Clash Squad allows only 2 teams. maxPlayers must be 2.');
+    if (tournament.mode === 'CS') {
+      const { getModeConfigForGame } = require('../constants/gameLobbyProfiles');
+      const csCap = getModeConfigForGame(tournament.game, 'CS', 'clash').maxPlayers;
+      if (maxPlayersNum !== csCap) {
+        return res.badRequest(
+          `For this game's CS/TDM lobby, maxPlayers (team slots) must be ${csCap}.`
+        );
+      }
     }
     tournament.maxPlayers = maxPlayersNum;
   }
@@ -1548,7 +1610,8 @@ const editTournament = asyncHandler(async (req, res) => {
     }
     tournament.mode = mode;
     if (mode === 'CS') {
-      tournament.maxPlayers = 2;
+      const { getModeConfigForGame } = require('../constants/gameLobbyProfiles');
+      tournament.maxPlayers = getModeConfigForGame(tournament.game, 'CS', 'clash').maxPlayers;
     }
   }
 
@@ -1567,7 +1630,8 @@ const editTournament = asyncHandler(async (req, res) => {
     }
     tournament.subMode = subMode;
     if (tournament.mode === 'CS' && subMode === 'clash') {
-      tournament.maxPlayers = 2;
+      const { getModeConfigForGame } = require('../constants/gameLobbyProfiles');
+      tournament.maxPlayers = getModeConfigForGame(tournament.game, 'CS', 'clash').maxPlayers;
     }
   }
 
@@ -2995,7 +3059,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
 
 module.exports = {
   adminLogin,
-  generateNextDayLobbies,
+  getAdminGamesCatalog,
   generateLobbies,
   getHostsForTournament,
   assignHost,

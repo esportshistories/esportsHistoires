@@ -4,15 +4,17 @@
  */
 
 const { FREEFIRE_LOBBY_RULES } = require('../constants');
+const { getLobbyFormatLabel } = require('../constants/gameLobbyProfiles');
 
 /**
  * Get filtered rules based on tournament mode and subMode
  * Returns only relevant rules for the specific tournament type
  * @param {string} mode - Tournament mode (BR, CS, LW)
  * @param {string} subMode - Tournament subMode (solo, duo, squad, 1v1, 2v2)
+ * @param {string} [game] - Canonical game title (e.g. BGMI) for format-specific labels
  * @returns {Object} Filtered rules object
  */
-const getFilteredRules = (mode, subMode) => {
+const getFilteredRules = (mode, subMode, game) => {
   const rules = FREEFIRE_LOBBY_RULES[mode];
   if (!rules) {
     return { mode, subMode, rules: [], generalRules: FREEFIRE_LOBBY_RULES.generalRules };
@@ -23,8 +25,13 @@ const getFilteredRules = (mode, subMode) => {
     return { mode, subMode, rules: [], generalRules: FREEFIRE_LOBBY_RULES.generalRules };
   }
 
+  const formatLabel = game ? getLobbyFormatLabel(game, mode, subMode) : null;
+  const titled = formatLabel
+    ? { ...subModeRules, title: formatLabel, formatLabel }
+    : subModeRules;
+
   return {
-    ...subModeRules,
+    ...titled,
     generalRules: FREEFIRE_LOBBY_RULES.generalRules
   };
 };

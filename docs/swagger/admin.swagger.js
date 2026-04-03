@@ -82,16 +82,20 @@
 
 /**
  * @swagger
- * /api/admin/generate-next-day-lobbies:
- *   post:
- *     summary: Generate next day lobbies (Admin only)
- *     description: Generate tournaments for the next day for all game modes and time slots (12 PM, 3 PM, 6 PM, 9 PM)
+ * /api/admin/games/catalog:
+ *   get:
+ *     summary: List all games for lobby creation (Admin only)
+ *     description: |
+ *       Returns the full static catalogue plus every distinct game string stored on tournaments, special tournaments,
+ *       and user profiles (game preference / followed games). Each entry has canonical `title` + `slug` where known.
+ *       Use `game` or `games` on POST `/api/admin/generate-lobbies` with supported catalogue `title` or `slug` only;
+ *       legacy or extra names may appear in this list but can still be rejected by lobby generation if unsupported.
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
  *     responses:
- *       201:
- *         description: Next day tournaments generated successfully
+ *       200:
+ *         description: Catalogue retrieved
  *         content:
  *           application/json:
  *             schema:
@@ -99,40 +103,29 @@
  *               properties:
  *                 status:
  *                   type: number
- *                   example: 201
+ *                   example: 200
  *                 success:
  *                   type: boolean
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Next day tournaments generated successfully
  *                 data:
  *                   type: object
  *                   properties:
- *                     tournaments:
+ *                     games:
  *                       type: array
  *                       items:
  *                         type: object
  *                         properties:
- *                           id:
+ *                           title:
  *                             type: string
- *                           game:
+ *                             example: BGMI
+ *                           platform:
  *                             type: string
- *                           mode:
+ *                             enum: [mobile, pc]
+ *                           slug:
  *                             type: string
- *                           subMode:
- *                             type: string
- *                           date:
- *                             type: string
- *                             format: date
- *                           startTime:
- *                             type: string
- *                           entryFee:
- *                             type: number
- *                           maxPlayers:
- *                             type: number
- *                     total:
- *                       type: number
+ *                             example: bgmi
  *       401:
  *         description: Unauthorized
  *       403:
@@ -420,7 +413,10 @@
  * /api/admin/generate-lobbies:
  *   post:
  *     summary: Generate lobbies with custom parameters (Admin only)
- *     description: Generate tournaments with custom date, time slots, game modes, and region selection
+ *     description: |
+ *       Single admin endpoint: **future IST calendar date** (YYYY-MM-DD), time slots, mode/submodes, optional fees.
+ *       **Region** is fixed to `Global` (not sent). Per-game caps: e.g. **BGMI** — CS/clash is **TDM** in UI but still **2 teams** (same as FF Clash Squad); **BR squad** caps at **16 teams** (join slots). **totalMatches** for CS is always **1**.
+ *       Users must have the lobby’s game in **followed games** to join (if they have any followed games set).
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -437,9 +433,9 @@
  *             properties:
  *               date:
  *                 type: string
- *                 format: date
- *                 example: '2024-12-25'
- *                 description: Date in ISO format (YYYY-MM-DD) - can be selected from calendar
+ *                 pattern: '^\\d{4}-\\d{2}-\\d{2}$'
+ *                 example: '2026-04-15'
+ *                 description: YYYY-MM-DD (not before today in IST)
  *               timeSlots:
  *                 type: array
  *                 items:
@@ -473,12 +469,27 @@
  *                   enum: [25, 50, 75, 100, 150, 200, 300]
  *                 example: [100, 200, 300]
  *                 description: Array of entry fees in INR (wallet). If not provided, uses default from mode config. Multiple entry fees will create separate lobbies for each. If 'price' is provided, it takes precedence.
- *               region:
+ *               totalMatches:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 20
+ *                 description: |
+ *                   **CS only (all games).** Must be **1** or omit (Clash / TDM is a single match set).
+ *               game:
  *                 type: string
- *                 enum: [Asia, Global]
- *                 default: Global
- *                 example: Asia
- *                 description: Region selection (optional, defaults to Global)
+ *                 example: BGMI
+ *                 description: Single catalogue title or slug (optional; default Free Fire)
+ *               games:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Create the same slot/mode config for multiple games
+ *               lobbyName:
+ *                 type: string
+ *                 maxLength: 120
+ *                 description: |
+ *                   Optional label. If omitted, name is `Lobby {n} {fee} {time}`.
+ *                   If set, format is `{lobbyName} · {subMode} · {fee} · {time}` for uniqueness.
  *     responses:
  *       201:
  *         description: Tournaments generated successfully

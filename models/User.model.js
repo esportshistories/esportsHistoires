@@ -143,6 +143,13 @@ const userSchema = new mongoose.Schema({
     trim: true,
     match: validations.phoneNumber.match
   },
+  /** Digits-only canonical form for uniqueness (synced from phoneNumber on save). Not exposed in API. */
+  phoneNormalized: {
+    type: String,
+    trim: true,
+    default: null,
+    select: false
+  },
   gender: {
     type: String,
     enum: validations.gender.enum,
@@ -290,11 +297,18 @@ const userSchema = new mongoose.Schema({
 // Note: googleId index is automatically created by unique: true, so we don't need to define it again
 // Note: role and isBlocked indexes are defined in the schema fields above
 userSchema.index({ ign: 1 });
+userSchema.index({ phoneNormalized: 1 }, { unique: true, sparse: true });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ 'refreshTokens.sessionId': 1 });
 userSchema.index({ 'deviceHistory.sessionId': 1, 'deviceHistory.loggedInAt': -1 });
 
-// Note: updatedAt is automatically managed by timestamps: true option, no need for pre-save hook
+// Sync phoneNormalized when phoneNumber changes (used for unique 1-phone-1-account).
+const { normalizePhoneForUniqueness } = require('../utils/phone.helper');
+userSchema.pre('save', function syncPhoneNormalized() {
+  if (!this.isModified('phoneNumber')) return;
+  const n = normalizePhoneForUniqueness(this.phoneNumber);
+  this.phoneNormalized = n || null;
+});
 
 // Method to remove sensitive data before sending to client
 userSchema.methods.toJSON = function() {
@@ -303,6 +317,7 @@ userSchema.methods.toJSON = function() {
   delete userObject.otp;
   delete userObject.refreshTokens; // Don't expose refresh tokens
   delete userObject.twoFactor; // Never expose 2FA secrets/status here; use dedicated endpoints
+  delete userObject.phoneNormalized;
   return userObject;
 };
 

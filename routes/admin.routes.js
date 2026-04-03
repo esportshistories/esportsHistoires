@@ -46,9 +46,11 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024 // 10MB limit
   }
 });
+const tournamentService = require('../services/tournament.service');
+
 const {
   adminLogin,
-  generateNextDayLobbies,
+  getAdminGamesCatalog,
   generateLobbies,
   getHostsForTournament,
   assignHost,
@@ -123,11 +125,11 @@ router.post(
   adminLogin
 );
 
-router.post(
-  '/generate-next-day-lobbies',
+router.get(
+  '/games/catalog',
   authenticate,
   isAdmin,
-  generateNextDayLobbies
+  getAdminGamesCatalog
 );
 
 router.post(
@@ -138,16 +140,10 @@ router.post(
     body('date')
       .notEmpty()
       .withMessage('date is required')
-      .isISO8601()
-      .withMessage('date must be a valid date in ISO format (YYYY-MM-DD)')
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage('date must be YYYY-MM-DD')
       .custom((value) => {
-        const selectedDate = new Date(value);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        selectedDate.setHours(0, 0, 0, 0);
-        if (selectedDate < today) {
-          throw new Error('date cannot be in the past');
-        }
+        tournamentService.assertGenerateLobbiesDateAllowed(value);
         return true;
       }),
     body('timeSlots')
@@ -206,10 +202,18 @@ router.post(
       .isInt({ min: 1 })
       .isIn([25, 50, 75, 100, 150, 200, 300])
       .withMessage('Each entryFee must be one of: 25, 50, 75, 100, 150, 200, 300'),
-    body('region')
+    body('totalMatches')
       .optional()
-      .isIn(['Asia', 'Global'])
-      .withMessage('region must be "Asia" or "Global"')
+      .isInt({ min: 1, max: 20 })
+      .withMessage('totalMatches must be an integer (CS: 1 only)'),
+    body('game')
+      .optional()
+      .isString()
+      .trim()
+      .isLength({ min: 1, max: 120 }),
+    body('games').optional().isArray(),
+    body('games.*').optional().isString().trim().notEmpty(),
+    body('lobbyName').optional().isString().trim().isLength({ max: 120 })
   ],
   validate,
   generateLobbies

@@ -12,6 +12,7 @@ const { checkUserExists, handleDatabaseError } = require('../utils/controller.he
 const Logger = require('../utils/logger');
 const tournamentService = require('../services/tournament.service');
 const cloudinaryService = require('../services/cloudinary.service');
+const { normalizePhoneForUniqueness } = require('../utils/phone.helper');
 
 const UPI_PATTERN = /^[\w.-]+@[\w]+$/;
 const MAX_SAVED_UPI_IDS = 10;
@@ -1093,7 +1094,50 @@ const updateProfile = asyncHandler(async (req, res) => {
   }
   
   if (resolvedPhoneNumber !== undefined) {
-    updateFields.phoneNumber = (typeof resolvedPhoneNumber === 'string' ? resolvedPhoneNumber.trim() : resolvedPhoneNumber) || null;
+    const raw =
+      typeof resolvedPhoneNumber === 'string'
+        ? resolvedPhoneNumber.trim()
+        : resolvedPhoneNumber;
+
+    const hadPhone = Boolean(user.phoneNumber && String(user.phoneNumber).trim() !== '');
+
+    const isClearing =
+      raw === null ||
+      raw === undefined ||
+      (typeof raw === 'string' && raw === '');
+
+    if (isClearing) {
+      if (hadPhone) {
+        return res.badRequest(
+          'Phone number cannot be removed. You can only update it to a different number.'
+        );
+      }
+      // No phone on file yet — ignore empty payload (do not clear a field that was never set).
+    } else {
+      const canonical = normalizePhoneForUniqueness(raw);
+      if (!canonical) {
+        return res.badRequest('Please provide a valid phone number');
+      }
+
+      const taken = await User.findOne({
+        _id: { $ne: userId },
+        phoneNormalized: canonical
+      })
+        .select('_id')
+        .lean();
+
+      if (taken) {
+        return res.badRequest(
+          'This phone number is already linked to another account. One number can only be used with one account.'
+        );
+      }
+
+      const display =
+        typeof resolvedPhoneNumber === 'string'
+          ? resolvedPhoneNumber.trim()
+          : String(resolvedPhoneNumber);
+      updateFields.phoneNumber = display;
+    }
   }
   
   if (resolvedGender !== undefined) {
@@ -1207,7 +1251,21 @@ const updateProfile = asyncHandler(async (req, res) => {
     }
   }
 
-  await user.save();
+  try {
+    await user.save();
+  } catch (err) {
+    const dupPhone =
+      err &&
+      err.code === 11000 &&
+      (err.keyPattern?.phoneNormalized ||
+        String(err.message || '').includes('phoneNormalized'));
+    if (dupPhone) {
+      return res.badRequest(
+        'This phone number is already linked to another account. One number can only be used with one account.'
+      );
+    }
+    throw err;
+  }
 
   // Update payment UPI(s) in MongoDB (old endpoint, multiple modes)
   const paymentOpsTouched =
