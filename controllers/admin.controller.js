@@ -277,7 +277,7 @@ const generateLobbies = asyncHandler(async (req, res) => {
       const { broadcastTournamentListUpdate } = require('./tournament.controller');
 
       tournaments.forEach((t) => {
-        const { playersPerTeam, maxTeams } = calculateTeamStats(t.subMode, t.maxPlayers);
+        const { playersPerTeam, maxTeams } = calculateTeamStats(t.subMode, t.maxPlayers, t.game);
 
         broadcastTournamentListUpdate({
           type: 'created',
@@ -314,7 +314,7 @@ const generateLobbies = asyncHandler(async (req, res) => {
     // No need to recalculate - use the reusable functions to get team stats and use stored values
     const tournamentsWithPrizePool = tournaments.map(t => {
       // Get team stats using reusable function (tournamentService already required at top of file)
-      const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(t.subMode, t.maxPlayers);
+      const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(t.subMode, t.maxPlayers, t.game);
       
       // Use stored potential prize pool from tournament creation (already calculated)
       const potentialPrizePoolBreakdown = {

@@ -500,8 +500,8 @@ const broadcastTournamentUpdate = (tournamentId, tournamentData, options = {}) =
 };
 
 /**
- * Broadcast live match results update to tournament participants, host, and tournament subscribers.
- * Called when host submits match result – participants see live standings immediately.
+ * Broadcast live match results update to joined participants, assigned host, and admin only.
+ * Does not emit to `tournament:{id}` room so non-participants cannot snoop by subscribing.
  * @param {string} tournamentId - Tournament ID
  * @param {Object} liveResultsData - { matchResults, standings, matchResultsCount, status, totalMatches }
  * @param {Array} participantIds - Array of participant user IDs (team leaders who joined)
@@ -520,9 +520,6 @@ const broadcastLiveResultsUpdate = (tournamentId, liveResultsData, participantId
     timestamp: new Date().toISOString()
   };
 
-  // Tournament room – anyone watching this tournament (e.g. live results page)
-  io.to(`tournament:${tournamentId}`).emit('tournament:live-results-updated', updateData);
-
   // Participants – users who joined this tournament (via user:userId)
   participantIds.forEach(userId => {
     const id = userId && userId.toString ? userId.toString() : String(userId);
@@ -539,6 +536,13 @@ const broadcastLiveResultsUpdate = (tournamentId, liveResultsData, participantId
   io.to('admin:tournaments').emit('tournament:live-results-updated', updateData);
 
   Logger.info('Live results update broadcasted', { tournamentId, participantCount: participantIds.length });
+
+  try {
+    const { broadcastTournamentLiveResultsSse } = require('./tournamentLiveResultsSse.service');
+    broadcastTournamentLiveResultsSse(tournamentId, liveResultsData);
+  } catch (sseErr) {
+    Logger.error('Live results SSE broadcast failed', { tournamentId, message: sseErr?.message });
+  }
 };
 
 /**

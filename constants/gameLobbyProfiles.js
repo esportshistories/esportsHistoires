@@ -10,13 +10,14 @@ const cloneModes = (base) => JSON.parse(JSON.stringify(base));
 
 /**
  * BGMI: “Clash Squad” in API is still mode CS / subMode clash (2 teams) — shown as **TDM** in UI.
- * **BR squad** caps at **16 teams** (each join = one team leader slot). Not TDM/CS.
+ * **BR squad**: `maxTeamSlots` = max **teams** (each API join = one team). Do not use `maxPlayers` here —
+ * base BR squad `maxPlayers: 48` is total in-game player semantics; mixing breaks team count (16÷4=4 bug).
  */
 const PER_GAME_MODE_OVERRIDES = {
   BGMI: {
     BR: {
       squad: {
-        maxPlayers: 16
+        maxTeamSlots: 16
       }
     }
   }

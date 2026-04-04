@@ -90,9 +90,29 @@ const getTournamentList = asyncHandler(async (req, res) => {
     Logger.error('List: Status check failed (non-blocking)', { err: checkErr?.message });
   }
 
-  // NOTE: game is REQUIRED in query for this endpoint to avoid returning
-  // unrelated games when user has multiple follows.
-  const parts = String(req.query.game).split(',').map(s => s.trim()).filter(Boolean);
+  // game query optional: falls back to profile followed games (same idea as GET /api/lobby/list).
+  let gameScope;
+  let parts;
+  if (req.query.game != null && String(req.query.game).trim() !== '') {
+    parts = String(req.query.game).split(',').map(s => s.trim()).filter(Boolean);
+    gameScope = 'query';
+  } else {
+    const followed = getUserSelectedGameGroups(req.user);
+    parts = [
+      ...new Set(
+        followed
+          .map((s) => resolveAnyGameTitle(s.game) || String(s.game || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (!parts.length) {
+      return res.badRequest(
+        'game is required (e.g. ?game=BGMI or ?game=Free+Fire), or add followed games in your profile'
+      );
+    }
+    gameScope = 'followed';
+  }
+
   const titles = [];
   for (const p of parts) {
     const t = resolveAnyGameTitle(p);
@@ -101,13 +121,13 @@ const getTournamentList = asyncHandler(async (req, res) => {
     }
     titles.push(t);
   }
-  const gameMatchKeys = normalizeGameMatchKeysForDb(titles);
-  const gameScope = 'query';
+  const uniqueTitles = [...new Set(titles)];
+  const gameMatchKeys = normalizeGameMatchKeysForDb(uniqueTitles);
 
   const specialTournaments =
     (mode === 'LW')
       ? []
-      : await getSpecialTournamentsForList(status, mode, subMode, gameMatchKeys);
+      : await getSpecialTournamentsForList(status, mode, subMode, uniqueTitles);
 
   // Pagination across merged list (specials first)
   const specialTotal = specialTournaments.length;
@@ -125,7 +145,7 @@ const getTournamentList = asyncHandler(async (req, res) => {
           date,
           subMode,
           mode,
-          gameMatchKeys,
+          uniqueTitles,
           { limit: remainingLimit, offset: regularOffset, includeTotal: true }
         )
       : { tournaments: [], total: 0 };
@@ -182,7 +202,7 @@ const getTournamentList = asyncHandler(async (req, res) => {
  *
  * Frontend flow:
  *  1. Call GET /api/tournament/list for initial data (same filters as you want live)
- *  2. Open EventSource('/api/tournament/list/stream?game=...') **optional** — if omitted, uses followed games; no follows ⇒ no events until ?game= is set.
+ *  2. Open EventSource with auth: `GET /api/tournament/list/stream?game=BGMI&access_token=<JWT>` (browser cannot set Bearer on EventSource).
  *
  * Events are only delivered when `payload.game` matches this connection's scope (same as list API).
  */
@@ -485,7 +505,11 @@ const getTournamentDetails = asyncHandler(async (req, res) => {
   
   // Calculate prize pool dynamically (consistent with list endpoints)
   const { calculateTeamStats, calculatePrizePoolBreakdown } = require('../services/tournament.service');
-  const { playersPerTeam, maxTeams } = calculateTeamStats(tournament.subMode, tournament.maxPlayers);
+  const { playersPerTeam, maxTeams } = calculateTeamStats(
+    tournament.subMode,
+    tournament.maxPlayers,
+    tournament.game
+  );
   const rawParticipantCount = tournament.participants ? tournament.participants.length : 0;
   const joinedTeams = rawParticipantCount; // Each participant = 1 team
   
@@ -1078,12 +1102,47 @@ const getLiveResults = asyncHandler(async (req, res) => {
   if (!tournamentId) return res.badRequest('tournamentId is required');
 
   try {
+    await tournamentService.assertUserCanViewLiveResults(tournamentId, req.userId, req.user);
     const data = await tournamentService.getLiveResults(tournamentId);
     res.success(HTTP_STATUS.OK, 'Live results retrieved', data);
   } catch (error) {
-    if (error.message === 'Tournament not found') return res.notFound(MESSAGES.ERROR.TOURNAMENT_NOT_FOUND);
+    if (error.code === 'TOURNAMENT_NOT_FOUND' || error.message === 'Tournament not found') {
+      return res.notFound(MESSAGES.ERROR.TOURNAMENT_NOT_FOUND);
+    }
+    if (error.code === 'FORBIDDEN_LIVE_RESULTS') {
+      return res.forbidden(error.message);
+    }
     return res.error(HTTP_STATUS.INTERNAL_SERVER_ERROR, error.message);
   }
+});
+
+/**
+ * SSE: live standings / match results for one tournament (same data as GET …/live-results).
+ * Host ke har match / final submit par `event: update` — payload WebSocket `tournament:live-results-updated` jaisa.
+ * GET /api/tournament/:tournamentId/live-results/stream?access_token=…
+ */
+const streamTournamentLiveResults = asyncHandler(async (req, res) => {
+  const { tournamentId } = req.params;
+  try {
+    await tournamentService.assertUserCanViewLiveResults(tournamentId, req.userId, req.user);
+  } catch (error) {
+    const deny = (status, msg) => {
+      if (!res.headersSent) {
+        res.status(status);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.end(msg);
+      }
+    };
+    if (error.code === 'TOURNAMENT_NOT_FOUND' || error.message === 'Tournament not found') {
+      return deny(404, 'Tournament not found');
+    }
+    if (error.code === 'FORBIDDEN_LIVE_RESULTS') {
+      return deny(403, error.message);
+    }
+    return deny(500, error.message || 'Internal error');
+  }
+  const { attachTournamentLiveResultsSse } = require('../services/tournamentLiveResultsSse.service');
+  await attachTournamentLiveResultsSse(req, res, tournamentId);
 });
 
 /**
@@ -1289,6 +1348,7 @@ module.exports = {
   submitFinalResult,
   getCanSubmitFinalResult,
   getLiveResults,
+  streamTournamentLiveResults,
   claimReward,
   getLobbyChatHistory
 };

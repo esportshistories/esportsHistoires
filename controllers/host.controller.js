@@ -34,6 +34,15 @@ const listAvailableTournaments = asyncHandler(async (req, res) => {
     query.status = { $in: ['upcoming', 'locked'] };
   }
 
+  // Same `tournament.date` window as GET /api/tournament/list (IST calendar).
+  // Without this, host `find()` could return old-dated rows that users never see (empty list APIs).
+  const dateLower = tournamentService.getUpcomingListDateLowerBoundUTC();
+  if (!status) {
+    query.date = { $gte: dateLower };
+  } else if (status === 'upcoming' || status === 'locked') {
+    query.date = { $gte: dateLower };
+  }
+
   // Get total count
   const total = await Tournament.countDocuments(query);
 
@@ -65,7 +74,11 @@ const listAvailableTournaments = asyncHandler(async (req, res) => {
   // Process tournaments with application status and prize pool info
   const tournamentsWithApplications = tournaments.map(tournament => {
     // Calculate team stats using reusable function
-    const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(tournament.subMode, tournament.maxPlayers);
+    const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(
+      tournament.subMode,
+      tournament.maxPlayers,
+      tournament.game
+    );
     
     // Calculate joined teams based on subMode
     // Each participant entry = 1 team (team leader joins, other team members are optional)
@@ -297,7 +310,7 @@ const listMyApplications = asyncHandler(async (req, res) => {
       return app;
     }
 
-    const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(t.subMode, t.maxPlayers);
+    const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(t.subMode, t.maxPlayers, t.game);
     const joinedTeams = 0; // From applications view, treat as not yet filled
     const availableTeams = maxTeams !== null ? maxTeams : null;
 
@@ -421,7 +434,11 @@ const endTournament = asyncHandler(async (req, res) => {
  * Helper: Map tournament to details (prize pool, teams, etc.)
  */
 const mapTournamentToDetails = (tournament) => {
-  const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(tournament.subMode, tournament.maxPlayers);
+  const { playersPerTeam, maxTeams } = tournamentService.calculateTeamStats(
+    tournament.subMode,
+    tournament.maxPlayers,
+    tournament.game
+  );
   const rawParticipantCount = Array.isArray(tournament.participants) ? tournament.participants.length : 0;
   const joinedTeams = Math.floor(rawParticipantCount / playersPerTeam);
   const availableTeams = maxTeams !== null ? (maxTeams - joinedTeams) : null;

@@ -167,27 +167,41 @@
  *   get:
  *     summary: Stream tournament list updates via Server-Sent Events (SSE)
  *     description: |
- *       SSE endpoint for real-time lobby list updates without polling.
- *       Frontend should:
- *       1. Call `GET /api/tournament/list` for initial data.
- *       2. Open `EventSource('/api/tournament/list/stream')` to receive updates.
+ *       Real-time lobby **list** patches (join slots + new lobbies). Scope = same `game` filter as list API (comma-separated titles allowed).
  *
- *       Events:
- *       - event: update
- *         - type: 'slots'   — when participant count / slots change
- *           Payload: `{ tournamentId, participantCount, maxPlayers }`
- *         - type: 'created' — when a new lobby is created by admin
- *           Payload: `{ tournamentId, game, mode, subMode, date, startTime, entryFee, maxPlayers, maxTeams, playersPerTeam, status, region, lobbyName, participantCount, prizePool }`
+ *       **Auth (browser EventSource):** native `EventSource` cannot send `Authorization`. Use query param `access_token=<JWT>` or a fetch-based SSE client with `Authorization: Bearer`.
+ *
+ *       **Flow:** `GET /api/tournament/list?game=...` for initial rows, then open this stream with the same `game` value.
+ *
+ *       **Events** (`event: update`):
+ *       - `type: 'slots'` — someone joined / slot count changed. Payload includes `tournamentId`, `game`, `participantCount`, `maxPlayers`.
+ *       - `type: 'created'` — admin created lobby(ies). Payload includes `tournamentId`, `game`, `mode`, `subMode`, `date`, `startTime`, `entryFee`, `maxPlayers`, `maxTeams`, `playersPerTeam`, `status`, `region`, `lobbyName`, `participantCount`, `prizePool`.
  *     tags: [Tournament]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: game
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: BGMI
+ *         description: Same as list API — one or comma-separated catalogue titles; only matching games receive events.
+ *       - in: query
+ *         name: access_token
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: JWT when Authorization header cannot be set (browser EventSource).
  *     responses:
  *       200:
- *         description: SSE stream started
+ *         description: text/event-stream (SSE)
+ *       400:
+ *         description: Missing or invalid game query
  *       401:
- *         description: Unauthorized
+ *         description: Unauthorized / missing token
  *       403:
- *         description: Forbidden
+ *         description: Email not verified
  */
 
 /**
@@ -506,24 +520,23 @@
  *   post:
  *     summary: Join tournament (with atomic transaction safety)
  *     description: |
- *       Join a tournament by deducting entry fee from wallet.
- *       
+ *       Join a tournament as team leader: wallet entry fee is deducted and you are added to participants.
+ *
+ *       **Game match (followed games):**
+ *       If the user has set followed games on their profile, the tournament's `game` must match one of those followed titles (same catalogue as profile). If no followed games are set, join is still allowed (legacy behaviour). Otherwise the API returns 400 with a message like: `Add "<Game Title>" to your followed games in profile to join this lobby`.
+ *
  *       **IMPORTANT - Transaction Safety:**
- *       This endpoint uses MongoDB atomic transactions to ensure:
- *       - Wallet deduction and tournament join happen together
- *       - If either operation fails, both are rolled back
- *       - Zero risk of money loss
- *       
+ *       MongoDB transactions (when the deployment supports them) ensure wallet deduction and tournament join succeed or fail together; if either step fails, both roll back.
+ *
  *       **Requirements:**
- *       - User must have sufficient GC balance
- *       - Tournament must be in 'upcoming' or 'locked' status
- *       - Tournament must not be full
- *       - User must not have already joined
- *       - Tournament must not have started (10 min before start time)
- *       
- *       **Real-time Updates:**
- *       After successfully joining, a WebSocket event `tournament:status-updated` is broadcasted to all subscribers.
- *       The event includes `joinedTeams` count which updates in real-time. Subscribe via `subscribe:tournament` or `subscribe:user-tournaments` to receive updates.
+ *       - Sufficient GC balance for `entryFee`
+ *       - Tournament status `upcoming` or `locked`
+ *       - Slots available; user not already a participant
+ *       - Join allowed until the scheduled start time (join closes when the lobby goes live, not X minutes early)
+ *       - Optional `players` list: CS uses up to 4 names per team; BR/LW up to 5; org BR squad may require 4–5 total players
+ *
+ *       **After join:**
+ *       Response includes `rules` (mode/subMode/game-specific lobby rules). Slot updates for tournament list UIs may be pushed via SSE (`tournament-list` stream) with minimal payload; WebSocket tournament subscriptions may also reflect status where applicable.
  *     tags: [Tournament]
  *     security:
  *       - bearerAuth: []
@@ -557,8 +570,62 @@
  *                       type: string
  *                     entryFee:
  *                       type: number
+ *                     rules:
+ *                       type: object
+ *                       description: Filtered lobby rules for this tournament (mode, subMode, game-specific labels, rule text, generalRules)
  *       400:
- *         description: Bad request (insufficient balance, tournament locked, already joined, full, or has started)
+ *         description: Bad request (game not in followed games, insufficient balance, locked, already joined, full, started, past date, invalid team size for org squad, validation error)
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Tournament not found
+ */
+
+/**
+ * @swagger
+ * /api/tournament/join-team:
+ *   post:
+ *     summary: Update team roster (bando) after joining
+ *     description: |
+ *       For users who already joined as team leader via `POST /api/tournament/join`. Updates the leader's team name match and `players` list (teammate IGNs). Same body shape as join: `tournamentId`, `teamName`, optional `players`.
+ *       Allowed while tournament is `upcoming`, `locked`, or `running`. Does not deduct wallet. CS/BR/LW and org BR squad player-count rules match join.
+ *     tags: [Tournament]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/JoinTournamentRequest'
+ *     responses:
+ *       200:
+ *         description: Team roster updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                   example: 200
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Team updated successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     tournamentId:
+ *                       type: string
+ *                     teamName:
+ *                       type: string
+ *                     playerCount:
+ *                       type: number
+ *       400:
+ *         description: Bad request (not a leader in this tournament, invalid status, org squad size, validation)
  *       401:
  *         description: Unauthorized
  *       404:
@@ -656,10 +723,52 @@
 
 /**
  * @swagger
+ * /api/tournament/{tournamentId}/live-results/stream:
+ *   get:
+ *     summary: SSE stream for live match results and standings (one tournament)
+ *     description: |
+ *       Server-Sent Events for the **same payload shape** as `GET …/live-results`, plus push on every host update.
+ *
+ *       On connect: `event: snapshot` with full current state (tournament meta, `matchResults`, `standings`).
+ *       When host submits a match or final result: `event: update` with body aligned to WebSocket `tournament:live-results-updated` — `type: 'live-results-updated'`, `tournamentId`, `matchResults`, `standings`, `matchResultsCount`, `status`, `totalMatches`, `timestamp`.
+ *
+ *       **Auth:** `Authorization: Bearer` or `?access_token=<JWT>` for browser `EventSource`.
+ *
+ *       **Access:** Only users who **joined** this tournament (participant), the **assigned host**, or **admin**. Others get 403.
+ *     tags: [Tournament]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: tournamentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: access_token
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: JWT for EventSource when Bearer header is not available.
+ *     responses:
+ *       200:
+ *         description: text/event-stream
+ *       400:
+ *         description: Bad tournament id
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Not a participant / not host / not admin, or email not verified
+ */
+
+/**
+ * @swagger
  * /api/tournament/{tournamentId}/live-results:
  *   get:
  *     summary: Get live match results and standings (for users)
- *     description: Returns partial match results and current aggregated standings. Use this so users can see participant results as host updates after each match (e.g. BR with 6 matches).
+ *     description: |
+ *       One-shot JSON; same data as the initial `snapshot` on `GET …/live-results/stream`. For live UI without polling, prefer the SSE stream — it pushes when the host updates results.
+ *       **Access:** Joined participants, assigned host, or admin only (403 otherwise).
  *     tags: [Tournament]
  *     security:
  *       - bearerAuth: []
@@ -764,6 +873,8 @@
  *                             description: Current rank (1-based)
  *       401:
  *         description: Unauthorized
+ *       403:
+ *         description: Not a participant, not assigned host, and not admin
  *       404:
  *         description: Tournament not found
  */

@@ -7,6 +7,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const { validate } = require('../middleware/validation.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
+const { authenticateUserSse } = require('../middleware/sseUserAuth.middleware');
 const {
   getTournamentList,
   streamTournamentList,
@@ -20,6 +21,7 @@ const {
   submitFinalResult,
   getCanSubmitFinalResult,
   getLiveResults,
+  streamTournamentLiveResults,
   claimReward,
   getLobbyChatHistory
 } = require('../controllers/tournament.controller');
@@ -47,13 +49,11 @@ router.get(
       .isIn(['solo', 'duo', 'squad', '1v1', '2v2', '4v4', '7round', '13round', 'clash'])
       .withMessage('Invalid subMode'),
     query('game')
-      .notEmpty()
-      .withMessage('game is required')
-      .bail()
+      .optional()
       .isString()
       .trim()
       .isLength({ min: 1, max: 200 })
-      .withMessage('game must be a non-empty string (comma-separated allowed)'),
+      .withMessage('if provided, game must be 1–200 chars (comma-separated allowed)'),
     query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit must be 1-100'),
     query('offset').optional().isInt({ min: 0 }).withMessage('offset must be non-negative')
   ],
@@ -63,7 +63,7 @@ router.get(
 
 router.get(
   '/list/stream',
-  authenticate,
+  authenticateUserSse,
   [
     query('game')
       .notEmpty()
@@ -103,6 +103,12 @@ router.get(
   ],
   validate,
   getTournamentHistory
+);
+
+router.get(
+  '/:tournamentId/live-results/stream',
+  authenticateUserSse,
+  streamTournamentLiveResults
 );
 
 router.get(

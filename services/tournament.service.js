@@ -6,7 +6,7 @@
 const mongoose = require('mongoose');
 const Tournament = require('../models/Tournament.model');
 const { MIN_TEAMS_FOR_START, POSITION_POINTS_TABLE } = require('../constants');
-const { parseAdminGameTitles } = require('../constants/gameCatalog');
+const { parseAdminGameTitles, resolveAnyGameTitle } = require('../constants/gameCatalog');
 const {
   getModeConfigForGame,
   getCsTotalMatchesBounds
@@ -34,10 +34,16 @@ const getModeConfig = (mode, subMode, gameTitle = 'Free Fire') => {
 /**
  * Calculate team statistics based on subMode
  * @param {string} subMode - Tournament subMode (solo, duo, squad, 1v1, 2v2)
- * @param {number} maxPlayers - Maximum players
+ * @param {number} maxPlayers - Stored tournament.maxPlayers (join cap: teams for squad/duo in BGMI squad; see generateLobbies)
+ * @param {string|null} [gameTitle] - Canonical game title when needed (BGMI BR squad: maxPlayers = team slots)
  * @returns {Object} { playersPerTeam, maxTeams }
  */
-const calculateTeamStats = (subMode, maxPlayers) => {
+const calculateTeamStats = (subMode, maxPlayers, gameTitle = null) => {
+  const g = gameTitle != null ? resolveAnyGameTitle(gameTitle) : null;
+  if (g === 'BGMI' && subMode === 'squad') {
+    return { playersPerTeam: 4, maxTeams: maxPlayers };
+  }
+
   let playersPerTeam = 1;
   let maxTeams = null;
 
@@ -53,6 +59,17 @@ const calculateTeamStats = (subMode, maxPlayers) => {
   }
 
   return { playersPerTeam, maxTeams };
+};
+
+/** Aggregation: maxTeams from stored fields (BGMI BR squad stores team count in maxPlayers). */
+const aggMaxTeamsExpr = {
+  $cond: {
+    if: {
+      $and: [{ $eq: ['$game', 'BGMI'] }, { $eq: ['$subMode', 'squad'] }]
+    },
+    then: '$maxPlayers',
+    else: { $floor: { $divide: ['$maxPlayers', '$playersPerTeam'] } }
+  }
 };
 
 /**
@@ -174,6 +191,16 @@ const assertGenerateLobbiesDateAllowed = (dateStr) => {
     const tds = `${todayIST.year}-${String(todayIST.month + 1).padStart(2, '0')}-${String(todayIST.day).padStart(2, '0')}`;
     throw new Error(`date cannot be in the past (IST). Today (IST): ${tds}`);
   }
+};
+
+/**
+ * Inclusive lower bound for `tournament.date` on public upcoming lists.
+ * Same UTC-midnight encoding as `generateLobbies` (YYYY-MM-DD → Date.UTC).
+ * Uses IST wall-calendar "today" so lists match admin create rules — avoids UTC/IST day skew vs host `find()` without date.
+ */
+const getUpcomingListDateLowerBoundUTC = () => {
+  const ist = getISTDateComponents(new Date());
+  return new Date(Date.UTC(ist.year, ist.month, ist.day, 0, 0, 0, 0));
 };
 
 /**
@@ -442,8 +469,15 @@ const generateLobbies = async (options) => {
 
           const lockTime = calculateLockTime(targetDate, startTime);
 
-          const { maxTeams } = calculateTeamStats(subMode, config.maxPlayers);
-          const potentialTotalPrizePool = maxTeams * entryFee;
+          let storedJoinCap = config.maxPlayers;
+          let prizeMaxTeams;
+          if (config.maxTeamSlots != null && config.maxTeamSlots !== '') {
+            storedJoinCap = Number(config.maxTeamSlots);
+            prizeMaxTeams = storedJoinCap;
+          } else {
+            ({ maxTeams: prizeMaxTeams } = calculateTeamStats(subMode, config.maxPlayers));
+          }
+          const potentialTotalPrizePool = prizeMaxTeams * entryFee;
           const potentialPrizePoolBreakdown = calculatePrizePoolBreakdown(
             potentialTotalPrizePool,
             mode,
@@ -487,7 +521,7 @@ const generateLobbies = async (options) => {
             mode,
             subMode,
             entryFee: entryFee,
-            maxPlayers: config.maxPlayers,
+            maxPlayers: storedJoinCap,
             date: targetDate,
             startTime,
             lockTime,
@@ -866,9 +900,20 @@ const joinTournament = async (tournamentId, userId, teamData = null) => {
  * @param {string} date - Specific date filter (optional, YYYY-MM-DD format)
  * @param {string} subMode - Filter by subMode: 'solo', 'duo', 'squad', '1v1', '2v2' (optional)
  * @param {string} mode - Filter by mode: 'CS', 'BR', 'LW' (optional)
- * @returns {Promise<Array>} Array of tournaments with joinedCount and availableSlots
+ * @param {string[]|null} [filterGameTitles] - Canonical catalogue titles (e.g. "Free Fire"); optional $in on tournament.game (matches admin-generated rows)
+ * @param {{ limit?: number, offset?: number, includeTotal?: boolean }|null} [listOptions] - When includeTotal is true, returns { tournaments, total } for list APIs
+ * @returns {Promise<Array|{ tournaments: Array, total: number }>} Plain array for legacy callers; paged object for list endpoints
  */
-const getTournamentsByStatus = async (status = 'upcoming', fromDate = null, toDate = null, date = null, subMode = null, mode = null) => {
+const getTournamentsByStatus = async (
+  status = 'upcoming',
+  fromDate = null,
+  toDate = null,
+  date = null,
+  subMode = null,
+  mode = null,
+  filterGameTitles = null,
+  listOptions = null
+) => {
   let matchQuery = {};
   
   // Helper function to create date range for exact date match (handles timezone correctly)
@@ -892,9 +937,7 @@ const getTournamentsByStatus = async (status = 'upcoming', fromDate = null, toDa
       matchQuery.date = { $gte: fromDate };
       if (toDate) matchQuery.date.$lte = toDate;
     } else {
-      const now = new Date();
-      const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      matchQuery.date = { $gte: todayUTC };
+      matchQuery.date = { $gte: getUpcomingListDateLowerBoundUTC() };
     }
   } else if (status === 'live') {
     matchQuery.status = { $in: ['running'] };
@@ -925,6 +968,13 @@ const getTournamentsByStatus = async (status = 'upcoming', fromDate = null, toDa
   if (subMode) matchQuery.subMode = subMode;
   if (mode) matchQuery.mode = mode;
 
+  if (Array.isArray(filterGameTitles) && filterGameTitles.length > 0) {
+    const uniqueTitles = [...new Set(filterGameTitles.map((t) => String(t || '').trim()).filter(Boolean))];
+    if (uniqueTitles.length) {
+      matchQuery.game = { $in: uniqueTitles };
+    }
+  }
+
   let sortOrder = { date: 1, startTime: 1 };
   if (status === 'completed' || status === 'cancelled') {
     sortOrder = { date: -1, startTime: -1 };
@@ -954,7 +1004,7 @@ const getTournamentsByStatus = async (status = 'upcoming', fromDate = null, toDa
     },
     {
       $addFields: {
-        maxTeams: { $floor: { $divide: ['$maxPlayers', '$playersPerTeam'] } }
+        maxTeams: aggMaxTeamsExpr
       }
     },
     {
@@ -1004,9 +1054,21 @@ const getTournamentsByStatus = async (status = 'upcoming', fromDate = null, toDa
     }
   ];
 
+  if (listOptions && listOptions.includeTotal) {
+    const skip = Math.max(0, parseInt(listOptions.offset, 10) || 0);
+    const limit = Math.min(Math.max(1, parseInt(listOptions.limit, 10) || 50), 100);
+    const countAgg = await Tournament.aggregate([...pipeline, { $count: 'total' }]);
+    const total = countAgg[0]?.total ?? 0;
+    const pageAgg = await Tournament.aggregate([
+      ...pipeline,
+      { $skip: skip },
+      { $limit: limit }
+    ]);
+    const populated = await Tournament.populate(pageAgg, { path: 'hostId', select: 'name ign' });
+    return { tournaments: populated, total };
+  }
+
   const tournaments = await Tournament.aggregate(pipeline);
-  
-  // Populate only hostId (minimal data) - DO NOT populate participants for performance
   return await Tournament.populate(tournaments, { path: 'hostId', select: 'name ign' });
 };
 
@@ -1210,7 +1272,7 @@ const getJoinedTournaments = async (userId) => {
     },
     {
       $addFields: {
-        maxTeams: { $floor: { $divide: ['$maxPlayers', '$playersPerTeam'] } }
+        maxTeams: aggMaxTeamsExpr
       }
     },
     {
@@ -1903,6 +1965,40 @@ const getCanSubmitFinalResult = async (tournamentId, hostUserId) => {
 };
 
 /**
+ * Enforce: only joined participants, assigned host, or admin may view live results (REST / SSE / targeted WS).
+ * @param {string} tournamentId
+ * @param {string} userId
+ * @param {{ role?: string }|null} user - req.user (admin check)
+ */
+const assertUserCanViewLiveResults = async (tournamentId, userId, user) => {
+  const tournament = await Tournament.findById(tournamentId).select('participants hostId').lean();
+  if (!tournament) {
+    const e = new Error('Tournament not found');
+    e.code = 'TOURNAMENT_NOT_FOUND';
+    throw e;
+  }
+  if (user && user.role === 'admin') return;
+
+  const uid = userId != null ? String(userId) : '';
+  if (!uid) {
+    const e = new Error('Only participants, the assigned host, or admin can view live results');
+    e.code = 'FORBIDDEN_LIVE_RESULTS';
+    throw e;
+  }
+
+  if (tournament.hostId && String(tournament.hostId) === uid) return;
+
+  const isParticipant = (tournament.participants || []).some(
+    (p) => toParticipantUserId(p) === uid
+  );
+  if (!isParticipant) {
+    const e = new Error('Only participants, the assigned host, or admin can view live results');
+    e.code = 'FORBIDDEN_LIVE_RESULTS';
+    throw e;
+  }
+};
+
+/**
  * Get live match results and current standings for a tournament (for users to see participant results).
  * @param {string} tournamentId - Tournament ID
  * @returns {Promise<Object>} { matchResults, standings, tournamentId, totalMatches }
@@ -2023,9 +2119,10 @@ const mapSpecialTournamentToListFormat = (st) => {
  * @param {string} status - 'upcoming'|'live'|'completed'|'pendingResult'|'cancelled'
  * @param {string|null} mode
  * @param {string|null} subMode
+ * @param {string[]|null} [filterGameTitles] - Same canonical titles as paid list; stops other games' sponsored rows from eating pagination slots
  * @returns {Promise<Array>}
  */
-const getSpecialTournamentsForList = async (status, mode, subMode) => {
+const getSpecialTournamentsForList = async (status, mode, subMode, filterGameTitles = null) => {
   try {
     const SpecialTournament = require('../models/SpecialTournament.model');
 
@@ -2043,6 +2140,12 @@ const getSpecialTournamentsForList = async (status, mode, subMode) => {
     const query = { status: stStatus };
     if (mode) query.mode = mode;
     if (subMode) query.subMode = subMode;
+    if (Array.isArray(filterGameTitles) && filterGameTitles.length > 0) {
+      const uniqueTitles = [...new Set(filterGameTitles.map((t) => String(t || '').trim()).filter(Boolean))];
+      if (uniqueTitles.length) {
+        query.game = { $in: uniqueTitles };
+      }
+    }
 
     const specials = await SpecialTournament.find(query)
       .sort({ createdAt: -1 })
@@ -2103,6 +2206,7 @@ module.exports = {
   // Reusable calculation functions
   calculateTeamStats,
   calculatePrizePoolBreakdown,
+  getUpcomingListDateLowerBoundUTC,
   generateLobbies,
   updatePrizePool,
   generateRewards,
@@ -2110,6 +2214,7 @@ module.exports = {
   submitFinalResult,
   getCanSubmitFinalResult,
   getLiveResults,
+  assertUserCanViewLiveResults,
   aggregateMatchStandings,
   joinTournament,
   getUpcomingTournaments,

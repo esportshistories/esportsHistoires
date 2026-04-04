@@ -48,6 +48,8 @@ const getLobbyList = asyncHandler(async (req, res) => {
 
   const selectedFollowedGames = getUserSelectedGameGroups(req.user);
   let gameMatchKeys;
+  /** Canonical titles for DB `game` field (no aggregation operators — works on older MongoDB). */
+  let resolvedGameTitles = [];
   let gameScope;
 
   if (req.query.game) {
@@ -60,9 +62,17 @@ const getLobbyList = asyncHandler(async (req, res) => {
       }
       titles.push(t);
     }
+    resolvedGameTitles = [...new Set(titles)];
     gameMatchKeys = normalizeGameMatchKeysForDb(titles);
     gameScope = 'query';
   } else if (selectedFollowedGames.length) {
+    resolvedGameTitles = [
+      ...new Set(
+        selectedFollowedGames
+          .map((s) => resolveAnyGameTitle(s.game) || String(s.game || '').trim())
+          .filter(Boolean)
+      )
+    ];
     gameMatchKeys = normalizeGameMatchKeysForDb(selectedFollowedGames.map(s => s.game));
     gameScope = 'followed';
   } else {
@@ -75,7 +85,7 @@ const getLobbyList = asyncHandler(async (req, res) => {
 
   const [sponsoredAll, paidPaged] = await Promise.all([
     includeSponsored && mode !== 'LW'
-      ? tournamentService.getSpecialTournamentsForList(status, mode, subMode, gameMatchKeys)
+      ? tournamentService.getSpecialTournamentsForList(status, mode, subMode, resolvedGameTitles)
       : [],
     includePaid
       ? tournamentService.getTournamentsByStatus(
@@ -85,7 +95,7 @@ const getLobbyList = asyncHandler(async (req, res) => {
           date,
           subMode,
           mode,
-          gameMatchKeys,
+          resolvedGameTitles,
           { limit, offset, includeTotal: true }
         )
       : { tournaments: [], total: 0 }

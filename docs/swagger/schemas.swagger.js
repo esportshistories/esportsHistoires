@@ -1115,11 +1115,26 @@
  *                 type: boolean
  *     JoinTournamentRequest:
  *       type: object
- *       required: ['tournamentId']
+ *       required: ['tournamentId', 'teamName']
  *       properties:
  *         tournamentId:
  *           type: string
  *           example: '507f1f77bcf86cd799439011'
+ *         teamName:
+ *           type: string
+ *           maxLength: 50
+ *           example: Thunder Squad
+ *           description: Display name for your team in the lobby
+ *         players:
+ *           type: array
+ *           maxItems: 5
+ *           description: |
+ *             Optional teammate IGNs (bando). Leader IGN is auto-prepended when absent and there is room.
+ *             CS lobbies accept at most 4 names per team; BR/LW at most 5. Organization BR squad tournaments require 4–5 players total (including leader).
+ *           items:
+ *             type: string
+ *             maxLength: 50
+ *             example: PlayerTwo
  *     UpdateRoomRequest:
  *       type: object
  *       required: ['tournamentId']
