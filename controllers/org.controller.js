@@ -172,7 +172,10 @@ const createOrgSpecialTournament = asyncHandler(async (req, res) => {
     registrationDeadline,
     description,
     formatLabel,
-    sponsorHandles
+    sponsorHandles,
+    rankRewards,
+    prizeByRank,
+    bracketAuto
   } = req.body;
 
   const organization = await Organization.findById(orgId);
@@ -198,6 +201,9 @@ const createOrgSpecialTournament = asyncHandler(async (req, res) => {
     description,
     formatLabel,
     sponsorHandles,
+    rankRewards,
+    prizeByRank,
+    bracketAuto,
     organizationId: orgId
   });
 

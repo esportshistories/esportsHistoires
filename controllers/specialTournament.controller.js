@@ -6,6 +6,7 @@
 const { asyncHandler } = require('../utils/response.helper');
 const { HTTP_STATUS } = require('../constants');
 const specialTournamentService = require('../services/specialTournament.service');
+const { attachSpecialTournamentSse, broadcastSpecialTournamentSse } = require('../services/specialTournamentSse.service');
 
 // ---------------------------------------------------------------------------
 // Admin endpoints
@@ -18,25 +19,16 @@ const specialTournamentService = require('../services/specialTournament.service'
  */
 const createSpecialTournament = asyncHandler(async (req, res) => {
   const adminId = req.userId;
-  const {
-    title, game, mode, subMode, region, lobbyName,
-    prizePool, prizeDistribution, maxSlots, rounds,
-    scheduledDate, scheduledTime, scheduledEndDate, registrationDeadline, description,
-    formatLabel, sponsorHandles
-  } = req.body;
-
-  const tournament = await specialTournamentService.createSpecialTournament(adminId, {
-    title, game, mode, subMode, region, lobbyName,
-    prizePool, prizeDistribution, maxSlots, rounds,
-    scheduledDate, scheduledTime, scheduledEndDate, registrationDeadline, description,
-    formatLabel, sponsorHandles
-  });
-
-  res.success(HTTP_STATUS.CREATED, 'Special tournament created successfully', { tournament });
+  const tournament = await specialTournamentService.createSpecialTournament(adminId, req.body);
+  res.success(
+    HTTP_STATUS.CREATED,
+    'Special tournament created. Registration is open; join is allowed per registrationStartDate / registrationDeadline.',
+    { tournament }
+  );
 });
 
 /**
- * Open registration (draft → registration_open)
+ * Legacy: draft → registration_open (new creates are already open)
  * POST /api/special-tournament/:id/open-registration
  * Access: Admin only
  */
@@ -44,7 +36,7 @@ const openRegistration = asyncHandler(async (req, res) => {
   const adminId = req.userId;
   const { id } = req.params;
   const tournament = await specialTournamentService.openRegistration(adminId, id);
-  res.success(HTTP_STATUS.OK, 'Registration opened successfully', { tournament });
+  res.success(HTTP_STATUS.OK, 'Registration is open for this tournament', { tournament });
 });
 
 /**
@@ -87,8 +79,42 @@ const startRound = asyncHandler(async (req, res) => {
     slots: round.slots.map(s => ({
       slotIndex: s.slotIndex,
       teamCount: s.teams.length,
-      teams: s.teams.map(t => ({ teamName: t.teamName }))
+      maxInvites: s.maxInvites != null ? s.maxInvites : 0,
+      invitesUsed: (s.teams || []).filter(t => t.isInvite === true).length,
+      teams: s.teams.map(t => ({ teamName: t.teamName, isInvite: Boolean(t.isInvite) }))
     }))
+  });
+});
+
+/**
+ * Add invite / wildcard team to a slot (before match results; cap set on round)
+ * POST /api/special-tournament/:id/round/:roundNum/slot/:slotIdx/add-invite-team
+ */
+const addInviteTeamToSlot = asyncHandler(async (req, res) => {
+  const adminId = req.userId;
+  const { id, roundNum, slotIdx } = req.params;
+  const { leaderUserId, teamName, players } = req.body;
+  const roundNumber = parseInt(roundNum, 10);
+  const slotIndex = parseInt(slotIdx, 10);
+
+  const tournament = await specialTournamentService.addInviteTeamToSlot(
+    adminId,
+    id,
+    roundNumber,
+    slotIndex,
+    { leaderUserId, teamName, players: players || [] }
+  );
+
+  const round = tournament.rounds.find(r => r.roundNumber === roundNumber);
+  const slot = round.slots.find(s => s.slotIndex === slotIndex);
+
+  res.success(HTTP_STATUS.OK, 'Invite team added to slot', {
+    roundNumber,
+    slotIndex,
+    teamCount: slot.teams.length,
+    maxInvites: slot.maxInvites,
+    invitesUsed: slot.teams.filter(t => t.isInvite === true).length,
+    teams: slot.teams.map(t => ({ teamName: t.teamName, isInvite: Boolean(t.isInvite) }))
   });
 });
 
@@ -275,10 +301,12 @@ const getSpecialTournamentList = asyncHandler(async (req, res) => {
   const skip = (page - 1) * limit;
   const { status, mode, subMode } = req.query;
 
+  const forAdmin = req.user && req.user.role === 'admin';
   const { tournaments, total } = await specialTournamentService.getSpecialTournamentList(
     { status, mode, subMode },
     limit,
-    skip
+    skip,
+    { forAdmin }
   );
 
   const totalPages = Math.ceil(total / limit);
@@ -312,7 +340,12 @@ const getSpecialTournamentDetails = asyncHandler(async (req, res) => {
     tournament = await specialTournamentService.getSpecialTournamentDetailsForUser(id, userId);
   }
 
-  res.success(HTTP_STATUS.OK, 'Special tournament details retrieved', { tournament });
+  const data = { tournament };
+  if (isAdmin) {
+    data.adminCapacityHints = await specialTournamentService.getSpecialTournamentCapacityHints(id);
+  }
+
+  res.success(HTTP_STATUS.OK, 'Special tournament details retrieved', data);
 });
 
 /**
@@ -323,6 +356,16 @@ const getSpecialTournamentAdminReport = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const report = await specialTournamentService.getSpecialTournamentAdminReport(id);
   res.success(HTTP_STATUS.OK, 'Special tournament admin report retrieved', report);
+});
+
+/**
+ * Admin: dynamic invite limits + phase hints (semifinal / final) from tournament.game lobby cap
+ * GET /api/special-tournament/:id/capacity-hints
+ */
+const getSpecialTournamentCapacityHints = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const data = await specialTournamentService.getSpecialTournamentCapacityHints(id);
+  res.success(HTTP_STATUS.OK, 'Capacity and invite plan for admin', data);
 });
 
 /**
@@ -352,6 +395,15 @@ const getSlotLiveResults = asyncHandler(async (req, res) => {
 });
 
 /**
+ * SSE stream for live registration count / status (EventSource; ?access_token= when needed)
+ * GET /api/special-tournament/:id/stream
+ */
+const streamSpecialTournament = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  await attachSpecialTournamentSse(req, res, id);
+});
+
+/**
  * Join a special tournament (free — no GC deducted)
  * POST /api/special-tournament/:id/join
  * Access: Authenticated users
@@ -365,7 +417,12 @@ const joinSpecialTournament = asyncHandler(async (req, res) => {
     return res.badRequest('teamName is required');
   }
 
-  const tournament = await specialTournamentService.joinSpecialTournament(userId, id, teamName, players);
+  const tournament = await specialTournamentService.joinSpecialTournament(
+    userId,
+    id,
+    teamName,
+    players ?? []
+  );
 
   // Broadcast update for dynamic joinedTeams count on public API
   const { broadcastTournamentUpdate } = require('../services/websocket.service');
@@ -374,12 +431,55 @@ const joinSpecialTournament = asyncHandler(async (req, res) => {
     joinedTeams: tournament.participants?.length || 0
   });
 
+  broadcastSpecialTournamentSse(tournament._id.toString(), {
+    status: tournament.status,
+    joinedTeams: tournament.participants?.length || 0,
+    maxSlots: tournament.maxSlots
+  });
+
+  const leaderTeam = (tournament.registeredTeams || []).find(
+    (t) => t.leaderUserId.toString() === userId.toString()
+  );
+  const teammateCount = leaderTeam ? (leaderTeam.players || []).length : 0;
+  const minTeammatesForRound1 = 3;
+
   res.success(HTTP_STATUS.OK, 'Successfully registered for the special tournament (free entry)', {
     tournamentId: tournament._id,
     title: tournament.title,
     status: tournament.status,
     participantCount: tournament.participants.length,
-    maxSlots: tournament.maxSlots
+    maxSlots: tournament.maxSlots,
+    roster: {
+      teammateNamesCount: teammateCount,
+      isEligibleForRound1: teammateCount >= minTeammatesForRound1,
+      teammatesNeededForRound1: Math.max(0, minTeammatesForRound1 - teammateCount)
+    }
+  });
+});
+
+/**
+ * Leader updates squad names during registration
+ * PATCH /api/special-tournament/:id/team
+ */
+const updateSpecialTournamentTeamRoster = asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { id } = req.params;
+  const tournament = await specialTournamentService.updateSpecialTournamentTeamRoster(
+    userId,
+    id,
+    req.body.players ?? []
+  );
+  const leaderTeam = (tournament.registeredTeams || []).find(
+    (t) => t.leaderUserId.toString() === userId.toString()
+  );
+  const teammateCount = leaderTeam ? (leaderTeam.players || []).length : 0;
+  const minTeammatesForRound1 = 3;
+
+  res.success(HTTP_STATUS.OK, 'Team roster updated', {
+    teammateNamesCount: teammateCount,
+    isEligibleForRound1: teammateCount >= minTeammatesForRound1,
+    teammatesNeededForRound1: Math.max(0, minTeammatesForRound1 - teammateCount),
+    players: (leaderTeam?.players || []).map((p) => p.name)
   });
 });
 
@@ -390,6 +490,7 @@ module.exports = {
   updateTournamentConfig,
   sendSpecialTournamentNotification,
   startRound,
+  addInviteTeamToSlot,
   assignSlotHost,
   distributeRewards,
   updateSlotRoom,
@@ -398,7 +499,10 @@ module.exports = {
   getSpecialTournamentList,
   getSpecialTournamentDetails,
   getSpecialTournamentAdminReport,
+  getSpecialTournamentCapacityHints,
   getSlotLiveResults,
   joinSpecialTournament,
+  updateSpecialTournamentTeamRoster,
+  streamSpecialTournament,
   declareFinalRanking
 };

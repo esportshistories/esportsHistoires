@@ -60,14 +60,36 @@ router.post(
     body('subMode').isIn(['solo', 'duo', 'squad', '1v1', '2v2', '4v4']).withMessage('Invalid subMode'),
     body('prizePool').isFloat({ min: 1 }).withMessage('prizePool must be at least 1'),
     body('maxSlots').isInt({ min: 2 }).withMessage('maxSlots must be at least 2'),
-    body('rounds').isArray({ min: 1 }).withMessage('rounds must be a non-empty array'),
-    body('rounds.*.roundNumber').isInt({ min: 1 }).withMessage('Each round must have roundNumber >= 1'),
-    body('rounds.*.teamsPerSlot').isInt({ min: 2 }).withMessage('Each round must have teamsPerSlot >= 2'),
-    body('rounds.*.matchesPerSlot').isInt({ min: 1 }).withMessage('Each round must have matchesPerSlot >= 1'),
-    body('rounds.*.qualifyPerSlot').isInt({ min: 1 }).withMessage('Each round must have qualifyPerSlot >= 1'),
+    body('rounds').optional().isArray(),
+    body('rounds.*.roundNumber').optional().isInt({ min: 1 }),
+    body('rounds.*.teamsPerSlot').optional().isInt({ min: 2 }),
+    body('rounds.*.matchesPerSlot').optional().isInt({ min: 1 }),
+    body('rounds.*.qualifyPerSlot').optional().isInt({ min: 1 }),
+    body('bracketAuto').optional().isObject(),
+    body('bracketAuto.qualifyPerSlot').optional().isInt({ min: 1, max: 30 }),
+    body('bracketAuto.matchesPerSlot').optional().isInt({ min: 1, max: 99 }),
+    body('game').optional().trim().isLength({ max: 80 }),
+    body().custom((_, { req }) => {
+      const hasRounds = Array.isArray(req.body.rounds) && req.body.rounds.length > 0;
+      const ba = req.body.bracketAuto;
+      const hasAuto = ba != null && typeof ba === 'object' && ba.qualifyPerSlot != null && ba.qualifyPerSlot !== '';
+      if (hasRounds && hasAuto) throw new Error('Send either rounds or bracketAuto, not both');
+      if (!hasRounds && !hasAuto) throw new Error('Send rounds[] or bracketAuto');
+      if (hasAuto && req.body.mode !== 'BR') throw new Error('bracketAuto requires mode BR');
+      if (hasAuto && (!req.body.game || !String(req.body.game).trim())) {
+        throw new Error('game is required with bracketAuto');
+      }
+      return true;
+    }),
     body('prizeDistribution').optional().isArray(),
     body('prizeDistribution.*.position').optional().isInt({ min: 1 }),
     body('prizeDistribution.*.percent').optional().isFloat({ min: 0, max: 100 }),
+    body('rankRewards').optional().isArray(),
+    body('rankRewards.*.position').optional().isInt({ min: 1 }),
+    body('rankRewards.*.amount').optional().isFloat({ min: 0 }),
+    body('prizeByRank').optional().isArray(),
+    body('prizeByRank.*.position').optional().isInt({ min: 1 }),
+    body('prizeByRank.*.amount').optional().isFloat({ min: 0 }),
     body('scheduledEndDate').optional().isISO8601().withMessage('scheduledEndDate must be valid ISO date'),
     body('formatLabel').optional().trim().isLength({ max: 200 }).withMessage('formatLabel max 200 chars'),
     body('sponsorHandles').optional().isObject().withMessage('sponsorHandles must be an object')

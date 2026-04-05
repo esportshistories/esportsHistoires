@@ -124,10 +124,11 @@ const getTournamentList = asyncHandler(async (req, res) => {
   const uniqueTitles = [...new Set(titles)];
   const gameMatchKeys = normalizeGameMatchKeysForDb(uniqueTitles);
 
+  const isAdmin = req.user && req.user.role === 'admin';
   const specialTournaments =
     (mode === 'LW')
       ? []
-      : await getSpecialTournamentsForList(status, mode, subMode, uniqueTitles);
+      : await getSpecialTournamentsForList(status, mode, subMode, uniqueTitles, { forAdmin: isAdmin });
 
   // Pagination across merged list (specials first)
   const specialTotal = specialTournaments.length;

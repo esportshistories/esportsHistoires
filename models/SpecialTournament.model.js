@@ -28,7 +28,9 @@ const slotTeamSchema = new mongoose.Schema({
   },
   players: [{
     name: { type: String, trim: true, maxlength: 50 }
-  }]
+  }],
+  /** Admin-seeded team for a slot (wildcard); not from previous-round qualification */
+  isInvite: { type: Boolean, default: false }
 }, { _id: true, timestamps: true });
 
 /**
@@ -78,7 +80,9 @@ const slotSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     default: null
-  }
+  },
+  /** Max admin invite teams allowed in this slot (set when round starts) */
+  maxInvites: { type: Number, default: 0, min: 0 }
 }, { _id: true });
 
 /**
@@ -114,6 +118,18 @@ const roundSchema = new mongoose.Schema({
     required: validations.qualifyPerSlot.required,
     min: validations.qualifyPerSlot.min
   },
+  /**
+   * Optional: exact bucket sizes for this round (sum must equal team count when round starts).
+   * Example semis: [12, 12, 6] for 30 qualified teams. If empty, teams split evenly by teamsPerSlot.
+   */
+  slotSizes: [{ type: Number, min: 2 }],
+  /**
+   * When slotSizes is set: max invite teams per slot index (same length as slotSizes).
+   * When using even split: use inviteSlotsPerSlot instead.
+   */
+  inviteSlotCaps: [{ type: Number, min: 0 }],
+  /** When not using slotSizes: same invite cap for every slot created in this round */
+  inviteSlotsPerSlot: { type: Number, default: 0, min: 0 },
   /** Status of this round */
   status: {
     type: String,
@@ -131,6 +147,23 @@ const prizeDistributionSchema = new mongoose.Schema({
   position: { type: Number, required: true, min: 1 },
   /** Percentage of prizePool that goes to this position (0-100) */
   percent: { type: Number, required: true, min: 0, max: 100 }
+}, { _id: false });
+
+/**
+ * Snapshot of reward per final rank (for UI + payout; preferred over recomputing from %)
+ */
+const rankRewardBreakdownSchema = new mongoose.Schema({
+  position: { type: Number, required: true, min: 1 },
+  amount: { type: Number, required: true, min: 0 }
+}, { _id: false });
+
+/**
+ * Named sponsor row (logo / link)
+ */
+const sponsorEntrySchema = new mongoose.Schema({
+  name: { type: String, default: '', trim: true, maxlength: 100 },
+  logoUrl: { type: String, default: null, trim: true, maxlength: 500 },
+  link: { type: String, default: null, trim: true, maxlength: 500 }
 }, { _id: false });
 
 /**
@@ -206,6 +239,8 @@ const specialTournamentSchema = new mongoose.Schema({
   },
   /** How prize is split among winners (admin-defined) */
   prizeDistribution: [prizeDistributionSchema],
+  /** Per-rank reward amounts (same currency unit as prizePool); used for display and payout */
+  rankRewardBreakdown: [rankRewardBreakdownSchema],
   /** Maximum total teams allowed to register */
   maxSlots: {
     type: Number,
@@ -250,11 +285,21 @@ const specialTournamentSchema = new mongoose.Schema({
   scheduledDate: { type: Date, default: null },
   scheduledTime: { type: String, default: null, trim: true },
   scheduledEndDate: { type: Date, default: null },
+  /** Registration window start (admin) */
+  registrationStartDate: { type: Date, default: null },
   registrationDeadline: { type: Date, default: null },
   /** Optional description/rules */
   description: { type: String, default: null, trim: true },
   /** Admin-defined format label (e.g. "12 teams per lobby, top 2 qualify") — shown to users */
   formatLabel: { type: String, default: null, trim: true, maxlength: 200 },
+  /** Bracket / flow type label (e.g. multi-round BR slots, single final) */
+  tournamentFormat: { type: String, default: null, trim: true, maxlength: 120 },
+  /** Tournament branding */
+  logoUrl: { type: String, default: null, trim: true, maxlength: 500 },
+  /** Optional live / VOD YouTube URL (separate from sponsor channel handle) */
+  youtubeStreamUrl: { type: String, default: null, trim: true, maxlength: 500 },
+  /** Sponsor rows with optional logo and link */
+  sponsors: [sponsorEntrySchema],
   /** Sponsor handles for users to follow (Instagram, Discord, YouTube, Telegram, WhatsApp, etc.) */
   sponsorHandles: {
     instagram: { type: String, default: null, trim: true, maxlength: 200 },

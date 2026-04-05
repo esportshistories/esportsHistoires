@@ -2122,9 +2122,11 @@ const mapSpecialTournamentToListFormat = (st) => {
  * @param {string[]|null} [filterGameTitles] - Same canonical titles as paid list; stops other games' sponsored rows from eating pagination slots
  * @returns {Promise<Array>}
  */
-const getSpecialTournamentsForList = async (status, mode, subMode, filterGameTitles = null) => {
+const getSpecialTournamentsForList = async (status, mode, subMode, filterGameTitles = null, options = {}) => {
   try {
     const SpecialTournament = require('../models/SpecialTournament.model');
+    const forAdmin = Boolean(options.forAdmin);
+    const now = new Date();
 
     // Map regular list status → special tournament statuses
     const statusQueryMap = {
@@ -2137,7 +2139,7 @@ const getSpecialTournamentsForList = async (status, mode, subMode, filterGameTit
     const stStatus = statusQueryMap[status];
     if (!stStatus) return [];
 
-    const query = { status: stStatus };
+    const query = {};
     if (mode) query.mode = mode;
     if (subMode) query.subMode = subMode;
     if (Array.isArray(filterGameTitles) && filterGameTitles.length > 0) {
@@ -2145,6 +2147,21 @@ const getSpecialTournamentsForList = async (status, mode, subMode, filterGameTit
       if (uniqueTitles.length) {
         query.game = { $in: uniqueTitles };
       }
+    }
+
+    if (status === 'upcoming' && !forAdmin) {
+      query.status = 'registration_open';
+      query.$and = [
+        {
+          $or: [
+            { registrationStartDate: null },
+            { registrationStartDate: { $exists: false } },
+            { registrationStartDate: { $lte: now } }
+          ]
+        }
+      ];
+    } else {
+      query.status = stStatus;
     }
 
     const specials = await SpecialTournament.find(query)

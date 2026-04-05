@@ -22,7 +22,7 @@ module.exports = {
   },
   region: {
     enum: ['Asia', 'Global'],
-    default: 'Asia'
+    default: 'Global'
   },
   lobbyName: {
     maxlength: [100, 'Lobby name cannot exceed 100 characters'],
@@ -38,7 +38,7 @@ module.exports = {
   },
   status: {
     enum: ['draft', 'registration_open', 'running', 'completed', 'cancelled'],
-    default: 'draft'
+    default: 'registration_open'
   },
   roundNumber: {
     required: [true, 'Round number is required'],
@@ -66,7 +66,7 @@ module.exports = {
   },
   formatLabel: { maxlength: [200, 'Format label cannot exceed 200 characters'] },
   sponsorHandle: { maxlength: [200, 'Sponsor handle cannot exceed 200 characters'] },
-  /** Team size: 4 compulsory, max 5 (leader + 3 or 4 in players array) */
+  /** Round-1 eligibility: ≥3 names in players array (4+ with leader). Join allows 0–4; complete via PATCH /team. */
   teamPlayersMin: 3,
   teamPlayersMax: 4
 };

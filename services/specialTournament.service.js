@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
 const SpecialTournament = require('../models/SpecialTournament.model');
 const { addBalance } = require('./wallet.service');
 const { POSITION_POINTS_TABLE } = require('../constants');
-const { resolveAnyGameTitle } = require('../constants/gameCatalog');
+const { resolveAnyGameTitle, maxTeamsPerSlotForGame } = require('../constants/gameCatalog');
 const Logger = require('../utils/logger');
 const { roundInr } = require('../utils/inr');
 const orgWalletService = require('./orgWallet.service');
@@ -165,6 +165,136 @@ const normalizeSponsorHandles = (handles) => {
   return out;
 };
 
+const parseOptionalDate = (v) => {
+  if (v == null || v === '') return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const normalizeSponsors = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 30).map((s) => ({
+    name: s && s.name != null ? String(s.name).trim().slice(0, 100) : '',
+    logoUrl: s && s.logoUrl != null && String(s.logoUrl).trim()
+      ? String(s.logoUrl).trim().slice(0, 500) : null,
+    link: s && s.link != null && String(s.link).trim()
+      ? String(s.link).trim().slice(0, 500) : null
+  })).filter(s => s.name || s.logoUrl || s.link);
+};
+
+const buildRankBreakdownFromPercents = (pool, prizeDistribution) => {
+  const list = (prizeDistribution || []).map(p => ({
+    position: p.position,
+    amount: roundInr((pool * (p.percent || 0)) / 100)
+  }));
+  list.sort((a, b) => a.position - b.position);
+  return list;
+};
+
+/**
+ * Admin sends fixed amounts per rank; derives percent rows for the same positions.
+ */
+const buildPrizeRowsFromRankRewards = (rankRewards, prizePool) => {
+  const sorted = [...rankRewards].map(r => ({
+    position: parseInt(r.position, 10),
+    amount: Number(r.amount)
+  })).filter(r => !Number.isNaN(r.position) && r.position >= 1 && !Number.isNaN(r.amount) && r.amount >= 0)
+    .sort((a, b) => a.position - b.position);
+
+  if (sorted.length === 0) {
+    throw new Error('rankRewards must contain at least one { position, amount }');
+  }
+  const seen = new Set();
+  for (const r of sorted) {
+    if (seen.has(r.position)) throw new Error(`Duplicate position in rankRewards: ${r.position}`);
+    seen.add(r.position);
+  }
+  const sum = sorted.reduce((s, r) => s + r.amount, 0);
+  if (Math.abs(sum - prizePool) > 0.02) {
+    throw new Error(`rankRewards total (${sum}) must equal prizePool (${prizePool})`);
+  }
+  const breakdown = sorted.map(r => ({ position: r.position, amount: roundInr(r.amount) }));
+  const prizeDistribution = sorted.map(r => ({
+    position: r.position,
+    percent: prizePool > 0 ? (r.amount / prizePool) * 100 : 0
+  }));
+  return { prizeDistribution, rankRewardBreakdown: breakdown };
+};
+
+const syncRankRewardBreakdown = (tournament) => {
+  const pool = Number(tournament.prizePool);
+  const dist = tournament.prizeDistribution || [];
+  if (!dist.length) {
+    tournament.rankRewardBreakdown = [];
+    return;
+  }
+  tournament.rankRewardBreakdown = buildRankBreakdownFromPercents(pool, dist);
+};
+
+/**
+ * Plan multi-round BR slots from max registration and game lobby cap (FF 12, BGMI 16).
+ * Each non-final round: ceil(teams/L) lobbies × top Q qualify. Stops at a single final lobby.
+ *
+ * @param {{ maxSlots: number, lobbySize: number, qualifyPerSlot: number, matchesPerSlot: number }} opts
+ * @returns {Array<{ roundNumber: number, roundName: string, teamsPerSlot: number, matchesPerSlot: number, qualifyPerSlot: number }>}
+ */
+const buildAutoRoundsFromBracket = ({ maxSlots, lobbySize, qualifyPerSlot, matchesPerSlot }) => {
+  const L = lobbySize;
+  const Q = qualifyPerSlot;
+  const M = matchesPerSlot != null && matchesPerSlot >= 1 ? matchesPerSlot : 3;
+
+  if (Q >= L) {
+    throw new Error(`bracketAuto.qualifyPerSlot (${Q}) must be less than lobby size (${L}) for this game`);
+  }
+  if (maxSlots < 2) {
+    throw new Error('maxSlots must be at least 2');
+  }
+
+  let T = maxSlots;
+  const planned = [];
+  let roundNumber = 1;
+  const maxIterations = 64;
+
+  while (roundNumber <= maxIterations) {
+    const numSlots = Math.ceil(T / L);
+
+    if (numSlots <= 1) {
+      const qFinal = Math.min(Q, Math.max(1, T - 1));
+      planned.push({
+        roundNumber,
+        roundName: `Round ${roundNumber} (Final)`,
+        teamsPerSlot: L,
+        matchesPerSlot: M,
+        qualifyPerSlot: qFinal
+      });
+      break;
+    }
+
+    const nextT = numSlots * Q;
+    if (nextT >= T) {
+      throw new Error(
+        `bracketAuto: bracket does not shrink (${T} teams, ${numSlots} lobbies × top ${Q} → ${nextT}). Lower qualifyPerSlot or change maxSlots.`
+      );
+    }
+
+    planned.push({
+      roundNumber,
+      roundName: `Round ${roundNumber}`,
+      teamsPerSlot: L,
+      matchesPerSlot: M,
+      qualifyPerSlot: Q
+    });
+    T = nextT;
+    roundNumber += 1;
+  }
+
+  if (roundNumber > maxIterations) {
+    throw new Error('bracketAuto: too many rounds; adjust maxSlots or qualifyPerSlot');
+  }
+
+  return planned;
+};
+
 // ---------------------------------------------------------------------------
 // Admin: Create
 // ---------------------------------------------------------------------------
@@ -184,7 +314,8 @@ const normalizeSponsorHandles = (handles) => {
  * @param {number} data.prizePool - Fixed prize pool in GC
  * @param {Array}  [data.prizeDistribution] - [{ position, percent }] sum must be <= 100
  * @param {number} data.maxSlots - Max total teams allowed to register
- * @param {Array}  data.rounds - [{ roundNumber, roundName?, teamsPerSlot, matchesPerSlot, qualifyPerSlot }]
+ * @param {Array}  [data.rounds] - manual rounds (omit if using bracketAuto)
+ * @param {Object} [data.bracketAuto] - { qualifyPerSlot, matchesPerSlot? } — builds rounds from maxSlots + game lobby size (12 FF / 16 BGMI); mode must be BR
  * @param {Date}   [data.scheduledDate]
  * @param {string} [data.scheduledTime]
  * @param {Date}   [data.scheduledEndDate]
@@ -192,16 +323,28 @@ const normalizeSponsorHandles = (handles) => {
  * @param {string} [data.description]
  * @param {string} [data.formatLabel]
  * @param {Object} [data.sponsorHandles] - { instagram, discord, youtube, telegram, whatsapp }
- * @returns {Promise<Object>} Created tournament
+ * @returns {Promise<Object>} Created tournament (status registration_open; join allowed when registrationStartDate has passed if set)
  */
 const createSpecialTournament = async (creatorUserId, data) => {
   const {
     title, game, mode, subMode, region, lobbyName,
-    prizePool, prizeDistribution, maxSlots, rounds,
+    prizePool, prizeDistribution, maxSlots, rounds, bracketAuto,
     scheduledDate, scheduledTime, scheduledEndDate, registrationDeadline, description,
-    formatLabel, sponsorHandles,
-    organizationId
+    formatLabel, tournamentFormat, sponsorHandles,
+    organizationId,
+    rankRewards,
+    prizeByRank,
+    sponsors,
+    logoUrl,
+    youtubeStreamUrl,
+    registrationPeriodStart,
+    registrationPeriodEnd,
+    registrationStartDate,
+    tournamentStartDate,
+    tournamentEndDate
   } = data;
+
+  const rankRewardInput = rankRewards || prizeByRank;
 
   if (!title || !mode || !subMode) {
     throw new Error('title, mode, and subMode are required');
@@ -215,44 +358,19 @@ const createSpecialTournament = async (creatorUserId, data) => {
   if (!maxSlots || maxSlots < 2) {
     throw new Error('maxSlots must be at least 2');
   }
-  if (!rounds || !Array.isArray(rounds) || rounds.length === 0) {
-    throw new Error('At least one round configuration is required');
+
+  const poolNum = Number(prizePool);
+
+  const useBracketAuto = bracketAuto != null && typeof bracketAuto === 'object'
+    && bracketAuto.qualifyPerSlot != null && String(bracketAuto.qualifyPerSlot).trim() !== '';
+
+  if (useBracketAuto && mode !== 'BR') {
+    throw new Error('bracketAuto is only supported when mode is BR');
+  }
+  if (useBracketAuto && (game == null || !String(game).trim())) {
+    throw new Error('game is required when using bracketAuto (Free Fire → 12 teams/lobby, BGMI → 16)');
   }
 
-  // Validate rounds
-  for (let i = 0; i < rounds.length; i++) {
-    const r = rounds[i];
-    if (!r.roundNumber || r.roundNumber < 1) throw new Error(`Round ${i + 1}: roundNumber must be >= 1`);
-    if (!r.teamsPerSlot || r.teamsPerSlot < 2) throw new Error(`Round ${i + 1}: teamsPerSlot must be >= 2`);
-    if (!r.matchesPerSlot || r.matchesPerSlot < 1) throw new Error(`Round ${i + 1}: matchesPerSlot must be >= 1`);
-    if (!r.qualifyPerSlot || r.qualifyPerSlot < 1) throw new Error(`Round ${i + 1}: qualifyPerSlot must be >= 1`);
-    if (r.qualifyPerSlot >= r.teamsPerSlot) {
-      throw new Error(`Round ${i + 1}: qualifyPerSlot (${r.qualifyPerSlot}) must be less than teamsPerSlot (${r.teamsPerSlot})`);
-    }
-  }
-
-  // Validate prizeDistribution if provided
-  if (prizeDistribution && prizeDistribution.length > 0) {
-    const totalPercent = prizeDistribution.reduce((sum, p) => sum + (p.percent || 0), 0);
-    if (totalPercent > 100) {
-      throw new Error(`prizeDistribution total percent (${totalPercent}%) exceeds 100%`);
-    }
-  }
-
-  const roundDocs = rounds.map(r => ({
-    roundNumber: r.roundNumber,
-    roundName: r.roundName || `Round ${r.roundNumber}`,
-    teamsPerSlot: r.teamsPerSlot,
-    matchesPerSlot: r.matchesPerSlot,
-    qualifyPerSlot: r.qualifyPerSlot,
-    status: 'pending',
-    slots: []
-  }));
-
-  // Sort rounds by roundNumber
-  roundDocs.sort((a, b) => a.roundNumber - b.roundNumber);
-
-  // Normalize game to canonical supported title if provided
   let resolvedGame = 'Free Fire';
   if (game !== undefined && game !== null && String(game).trim() !== '') {
     const r = resolveAnyGameTitle(game);
@@ -260,10 +378,160 @@ const createSpecialTournament = async (creatorUserId, data) => {
     resolvedGame = r;
   }
 
-  // If org-sponsored, validate org wallet can fund prize pool.
-  if (organizationId) {
-    await orgWalletService.lockOrgFundsForTournament(organizationId, Number(prizePool));
+  const slotCap = maxTeamsPerSlotForGame(resolvedGame);
+
+  let roundsEffective;
+  let autoQualify = null;
+  if (useBracketAuto) {
+    if (rounds && Array.isArray(rounds) && rounds.length > 0) {
+      throw new Error('Do not send rounds[] when using bracketAuto');
+    }
+    autoQualify = parseInt(bracketAuto.qualifyPerSlot, 10);
+    const autoMatches = bracketAuto.matchesPerSlot != null
+      ? parseInt(bracketAuto.matchesPerSlot, 10)
+      : 3;
+    if (Number.isNaN(autoQualify) || autoQualify < 1) {
+      throw new Error('bracketAuto.qualifyPerSlot must be a positive integer');
+    }
+    if (Number.isNaN(autoMatches) || autoMatches < 1) {
+      throw new Error('bracketAuto.matchesPerSlot must be at least 1');
+    }
+    roundsEffective = buildAutoRoundsFromBracket({
+      maxSlots,
+      lobbySize: slotCap,
+      qualifyPerSlot: autoQualify,
+      matchesPerSlot: autoMatches
+    });
+  } else {
+    if (!rounds || !Array.isArray(rounds) || rounds.length === 0) {
+      throw new Error('Provide rounds[] or bracketAuto { qualifyPerSlot, matchesPerSlot? }');
+    }
+    roundsEffective = rounds;
   }
+
+  for (let i = 0; i < roundsEffective.length; i++) {
+    const r = roundsEffective[i];
+    if (!r.roundNumber || r.roundNumber < 1) throw new Error(`Round ${i + 1}: roundNumber must be >= 1`);
+    const hasSlotSizes = Array.isArray(r.slotSizes) && r.slotSizes.length > 0;
+    if (hasSlotSizes) {
+      const sizes = r.slotSizes.map(x => parseInt(x, 10));
+      for (let k = 0; k < sizes.length; k++) {
+        const sz = sizes[k];
+        if (Number.isNaN(sz) || sz < 2) {
+          throw new Error(`Round ${i + 1}: slotSizes[${k}] must be an integer >= 2`);
+        }
+        if (sz > slotCap) {
+          throw new Error(
+            `Round ${i + 1}: slotSizes[${k}] (${sz}) exceeds lobby cap ${slotCap} for ${resolvedGame}`
+          );
+        }
+      }
+      const minSz = Math.min(...sizes);
+      if (!r.qualifyPerSlot || r.qualifyPerSlot < 1) {
+        throw new Error(`Round ${i + 1}: qualifyPerSlot must be >= 1`);
+      }
+      if (r.qualifyPerSlot >= minSz) {
+        throw new Error(
+          `Round ${i + 1}: qualifyPerSlot (${r.qualifyPerSlot}) must be < smallest slot size (${minSz})`
+        );
+      }
+      if (Array.isArray(r.inviteSlotCaps) && r.inviteSlotCaps.length > 0) {
+        if (r.inviteSlotCaps.length !== sizes.length) {
+          throw new Error(`Round ${i + 1}: inviteSlotCaps length must match slotSizes length`);
+        }
+        for (let j = 0; j < sizes.length; j++) {
+          const inv = Math.max(0, parseInt(r.inviteSlotCaps[j], 10) || 0);
+          if (sizes[j] + inv > slotCap) {
+            throw new Error(
+              `Round ${i + 1}: slot ${j + 1} qualified (${sizes[j]}) + invites (${inv}) exceeds lobby cap ${slotCap} for ${resolvedGame}`
+            );
+          }
+        }
+      }
+    } else {
+      if (!r.teamsPerSlot || r.teamsPerSlot < 2) throw new Error(`Round ${i + 1}: teamsPerSlot must be >= 2`);
+      if (r.teamsPerSlot > slotCap) {
+        throw new Error(
+          `Round ${i + 1}: teamsPerSlot (${r.teamsPerSlot}) exceeds max ${slotCap} for ${resolvedGame} (BGMI: 16 per match, Free Fire: 12)`
+        );
+      }
+      if (!r.qualifyPerSlot || r.qualifyPerSlot < 1) throw new Error(`Round ${i + 1}: qualifyPerSlot must be >= 1`);
+      if (r.qualifyPerSlot >= r.teamsPerSlot) {
+        throw new Error(`Round ${i + 1}: qualifyPerSlot (${r.qualifyPerSlot}) must be less than teamsPerSlot (${r.teamsPerSlot})`);
+      }
+      const invU = r.inviteSlotsPerSlot != null ? parseInt(r.inviteSlotsPerSlot, 10) : 0;
+      if (!Number.isNaN(invU) && invU > 0 && r.teamsPerSlot + invU > slotCap) {
+        throw new Error(
+          `Round ${i + 1}: teamsPerSlot + inviteSlotsPerSlot exceeds lobby cap ${slotCap} for ${resolvedGame}`
+        );
+      }
+    }
+    if (!r.matchesPerSlot || r.matchesPerSlot < 1) throw new Error(`Round ${i + 1}: matchesPerSlot must be >= 1`);
+  }
+
+  let finalPrizeDistribution;
+  let rankRewardBreakdown;
+  if (rankRewardInput && rankRewardInput.length > 0) {
+    const built = buildPrizeRowsFromRankRewards(rankRewardInput, poolNum);
+    finalPrizeDistribution = built.prizeDistribution;
+    rankRewardBreakdown = built.rankRewardBreakdown;
+  } else if (prizeDistribution && prizeDistribution.length > 0) {
+    const totalPercent = prizeDistribution.reduce((sum, p) => sum + (p.percent || 0), 0);
+    if (totalPercent > 100) {
+      throw new Error(`prizeDistribution total percent (${totalPercent}%) exceeds 100%`);
+    }
+    finalPrizeDistribution = prizeDistribution;
+    rankRewardBreakdown = buildRankBreakdownFromPercents(poolNum, prizeDistribution);
+  } else {
+    throw new Error('Provide prizeDistribution (percent per rank) or rankRewards (amount per rank; must sum to prizePool)');
+  }
+
+  const roundDocs = roundsEffective.map((r) => {
+    const hasSlotSizes = Array.isArray(r.slotSizes) && r.slotSizes.length > 0;
+    const slotSizes = hasSlotSizes ? r.slotSizes.map(x => parseInt(x, 10)) : [];
+    const inviteSlotCaps = Array.isArray(r.inviteSlotCaps) && r.inviteSlotCaps.length
+      ? r.inviteSlotCaps.map(x => Math.max(0, parseInt(x, 10) || 0))
+      : [];
+    const tps = hasSlotSizes ? Math.max(...slotSizes) : r.teamsPerSlot;
+    return {
+      roundNumber: r.roundNumber,
+      roundName: r.roundName || `Round ${r.roundNumber}`,
+      teamsPerSlot: tps,
+      matchesPerSlot: r.matchesPerSlot,
+      qualifyPerSlot: r.qualifyPerSlot,
+      slotSizes: hasSlotSizes ? slotSizes : [],
+      inviteSlotCaps: hasSlotSizes && inviteSlotCaps.length ? inviteSlotCaps : [],
+      inviteSlotsPerSlot: hasSlotSizes ? 0 : Math.max(0, parseInt(r.inviteSlotsPerSlot, 10) || 0),
+      status: 'pending',
+      slots: []
+    };
+  });
+
+  roundDocs.sort((a, b) => a.roundNumber - b.roundNumber);
+
+  let finalFormatLabel = formatLabel && String(formatLabel).trim() ? String(formatLabel).trim().slice(0, 200) : null;
+  let finalTournamentFormat = tournamentFormat && String(tournamentFormat).trim()
+    ? String(tournamentFormat).trim().slice(0, 120) : null;
+  if (useBracketAuto && autoQualify != null) {
+    if (!finalFormatLabel) {
+      finalFormatLabel =
+        `${slotCap} per lobby · top ${autoQualify} qualify · ${roundDocs.length} rounds (auto)`.slice(0, 200);
+    }
+    if (!finalTournamentFormat) {
+      finalTournamentFormat = `BR auto · ${resolvedGame} · ${slotCap}-team lobbies`.slice(0, 120);
+    }
+  }
+
+  if (organizationId) {
+    await orgWalletService.lockOrgFundsForTournament(organizationId, poolNum);
+  }
+
+  const regStart = parseOptionalDate(registrationPeriodStart ?? registrationStartDate);
+  const regEnd = parseOptionalDate(registrationPeriodEnd ?? registrationDeadline);
+  const tStart = parseOptionalDate(tournamentStartDate ?? scheduledDate);
+  const tEnd = parseOptionalDate(tournamentEndDate ?? scheduledEndDate);
+
+  const resolvedRegion = (region === 'Asia' || region === 'Global') ? region : 'Global';
 
   const tournament = await SpecialTournament.create({
     tournamentType: 'sponsored',
@@ -271,25 +539,52 @@ const createSpecialTournament = async (creatorUserId, data) => {
     game: resolvedGame,
     mode,
     subMode,
-    region: region || 'Asia',
+    region: resolvedRegion,
     lobbyName: lobbyName || title,
-    prizePool,
-    prizeDistribution: prizeDistribution || [],
+    prizePool: poolNum,
+    prizeDistribution: finalPrizeDistribution,
+    rankRewardBreakdown,
     maxSlots,
-    status: 'draft',
+    status: 'registration_open',
     createdBy: creatorUserId,
     organizationId: organizationId || null,
     rounds: roundDocs,
-    scheduledDate: scheduledDate || null,
-    scheduledTime: scheduledTime || null,
-    scheduledEndDate: scheduledEndDate || null,
-    registrationDeadline: registrationDeadline || null,
+    scheduledDate: tStart,
+    scheduledTime: scheduledTime != null && String(scheduledTime).trim() ? String(scheduledTime).trim().slice(0, 32) : null,
+    scheduledEndDate: tEnd,
+    registrationStartDate: regStart,
+    registrationDeadline: regEnd,
     description: description || null,
-    formatLabel: formatLabel && String(formatLabel).trim() ? String(formatLabel).trim().slice(0, 200) : null,
+    formatLabel: finalFormatLabel,
+    tournamentFormat: finalTournamentFormat,
+    logoUrl: logoUrl && String(logoUrl).trim() ? String(logoUrl).trim().slice(0, 500) : null,
+    youtubeStreamUrl: youtubeStreamUrl && String(youtubeStreamUrl).trim()
+      ? String(youtubeStreamUrl).trim().slice(0, 500) : null,
+    sponsors: normalizeSponsors(sponsors),
     sponsorHandles: normalizeSponsorHandles(sponsorHandles)
   });
 
-  return tournament;
+  broadcastSpecialTournamentEvent(
+    tournament._id.toString(),
+    'special-tournament:status-updated',
+    {
+      status: 'registration_open',
+      title: tournament.title,
+      prizePool: tournament.prizePool,
+      maxSlots: tournament.maxSlots
+    }
+  );
+
+  try {
+    await tryAutoAdvanceSpecialTournament(tournament._id.toString());
+  } catch (advErr) {
+    Logger.warn('SpecialTournament tryAutoAdvance after create', {
+      tournamentId: tournament._id.toString(),
+      err: advErr.message
+    });
+  }
+
+  return SpecialTournament.findById(tournament._id);
 };
 
 // ---------------------------------------------------------------------------
@@ -297,7 +592,8 @@ const createSpecialTournament = async (creatorUserId, data) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Open registration for the tournament (draft → registration_open)
+ * Legacy: draft → registration_open. New tournaments are created already open; this is only for old draft rows or manual fixes.
+ * Idempotent if already registration_open.
  * @param {string} adminId
  * @param {string} tournamentId
  * @returns {Promise<Object>}
@@ -305,6 +601,9 @@ const createSpecialTournament = async (creatorUserId, data) => {
 const openRegistration = async (adminId, tournamentId) => {
   const tournament = await SpecialTournament.findById(tournamentId);
   if (!tournament) throw new Error('Special tournament not found');
+  if (tournament.status === 'registration_open') {
+    return tournament;
+  }
   if (tournament.status !== 'draft') {
     throw new Error(`Cannot open registration. Current status: ${tournament.status}`);
   }
@@ -317,7 +616,16 @@ const openRegistration = async (adminId, tournamentId) => {
     { status: 'registration_open', title: tournament.title, prizePool: tournament.prizePool, maxSlots: tournament.maxSlots }
   );
 
-  return tournament;
+  try {
+    await tryAutoAdvanceSpecialTournament(tournament._id.toString());
+  } catch (advErr) {
+    Logger.warn('SpecialTournament tryAutoAdvance after openRegistration', {
+      tournamentId: tournament._id.toString(),
+      err: advErr.message
+    });
+  }
+
+  return SpecialTournament.findById(tournamentId);
 };
 
 /**
@@ -372,7 +680,8 @@ const updateTournamentConfig = async (adminId, tournamentId, updates) => {
   if (tournament.rewardsDistributed) throw new Error('Rewards already distributed; tournament is locked');
 
   const allowed = ['maxSlots', 'prizePool', 'prizeDistribution', 'title', 'lobbyName', 'description',
-    'scheduledDate', 'scheduledTime', 'scheduledEndDate', 'registrationDeadline', 'formatLabel', 'sponsorHandles', 'rounds'];
+    'scheduledDate', 'scheduledTime', 'scheduledEndDate', 'registrationDeadline', 'registrationStartDate',
+    'formatLabel', 'tournamentFormat', 'sponsorHandles', 'sponsors', 'logoUrl', 'youtubeStreamUrl', 'region', 'rounds'];
 
   let changed = false;
   for (const key of allowed) {
@@ -391,9 +700,46 @@ const updateTournamentConfig = async (adminId, tournamentId, updates) => {
           throw new Error(`Round ${rn} has already started (status: ${round.status}). Only pending rounds can be updated.`);
         }
         if (ru.roundName != null) round.roundName = String(ru.roundName).trim() || `Round ${rn}`;
-        if (ru.teamsPerSlot != null) {
+        const cap = maxTeamsPerSlotForGame(tournament.game);
+        if (ru.slotSizes != null) {
+          if (!Array.isArray(ru.slotSizes) || ru.slotSizes.length === 0) {
+            round.slotSizes = [];
+            round.inviteSlotCaps = [];
+          } else {
+            const sizes = ru.slotSizes.map(x => parseInt(x, 10));
+            for (let j = 0; j < sizes.length; j++) {
+              const sz = sizes[j];
+              if (isNaN(sz) || sz < 2) throw new Error(`Round ${rn}: slotSizes[${j}] invalid`);
+              if (sz > cap) throw new Error(`Round ${rn}: slotSizes[${j}] exceeds lobby cap ${cap}`);
+            }
+            round.slotSizes = sizes;
+            round.teamsPerSlot = Math.max(...sizes);
+            if (ru.inviteSlotCaps != null) {
+              if (!Array.isArray(ru.inviteSlotCaps) || ru.inviteSlotCaps.length !== sizes.length) {
+                throw new Error(`Round ${rn}: inviteSlotCaps length must match slotSizes`);
+              }
+              const capsArr = ru.inviteSlotCaps.map(x => Math.max(0, parseInt(x, 10) || 0));
+              for (let j = 0; j < sizes.length; j++) {
+                if (sizes[j] + capsArr[j] > cap) {
+                  throw new Error(`Round ${rn}: slot ${j + 1} qualified + invites exceeds lobby cap ${cap}`);
+                }
+              }
+              round.inviteSlotCaps = capsArr;
+            }
+          }
+        }
+        if (ru.inviteSlotsPerSlot != null && (!round.slotSizes || round.slotSizes.length === 0)) {
+          const inv = Math.max(0, parseInt(ru.inviteSlotsPerSlot, 10) || 0);
+          const tps = round.teamsPerSlot || 2;
+          if (tps + inv > cap) {
+            throw new Error(`Round ${rn}: teamsPerSlot + inviteSlotsPerSlot exceeds lobby cap ${cap}`);
+          }
+          round.inviteSlotsPerSlot = inv;
+        }
+        if (ru.teamsPerSlot != null && (!round.slotSizes || round.slotSizes.length === 0)) {
           const v = parseInt(ru.teamsPerSlot, 10);
           if (isNaN(v) || v < 2) throw new Error(`Round ${rn}: teamsPerSlot must be >= 2`);
+          if (v > cap) throw new Error(`Round ${rn}: teamsPerSlot max is ${cap} for ${tournament.game}`);
           round.teamsPerSlot = v;
         }
         if (ru.matchesPerSlot != null) {
@@ -404,7 +750,10 @@ const updateTournamentConfig = async (adminId, tournamentId, updates) => {
         if (ru.qualifyPerSlot != null) {
           const v = parseInt(ru.qualifyPerSlot, 10);
           if (isNaN(v) || v < 1) throw new Error(`Round ${rn}: qualifyPerSlot must be >= 1`);
-          if (v >= (round.teamsPerSlot || 2)) throw new Error(`Round ${rn}: qualifyPerSlot must be less than teamsPerSlot`);
+          const minSz = (round.slotSizes && round.slotSizes.length)
+            ? Math.min(...round.slotSizes.map(x => Number(x)))
+            : (round.teamsPerSlot || 2);
+          if (v >= minSz) throw new Error(`Round ${rn}: qualifyPerSlot must be less than smallest slot / teamsPerSlot (${minSz})`);
           round.qualifyPerSlot = v;
         }
       }
@@ -423,19 +772,45 @@ const updateTournamentConfig = async (adminId, tournamentId, updates) => {
       const newPrize = Number(updates.prizePool);
       if (isNaN(newPrize) || newPrize < 1) throw new Error('prizePool must be at least 1 GC');
       tournament.prizePool = newPrize;
+      syncRankRewardBreakdown(tournament);
       changed = true;
     } else if (key === 'prizeDistribution') {
       if (!Array.isArray(updates.prizeDistribution)) throw new Error('prizeDistribution must be an array');
       const totalPercent = updates.prizeDistribution.reduce((s, p) => s + (p.percent || 0), 0);
       if (totalPercent > 100) throw new Error(`prizeDistribution total percent (${totalPercent}%) exceeds 100%`);
       tournament.prizeDistribution = updates.prizeDistribution;
+      syncRankRewardBreakdown(tournament);
       changed = true;
     } else if (key === 'sponsorHandles') {
       tournament.sponsorHandles = normalizeSponsorHandles(updates.sponsorHandles);
       changed = true;
+    } else if (key === 'sponsors') {
+      tournament.sponsors = normalizeSponsors(updates.sponsors);
+      changed = true;
     } else if (key === 'formatLabel') {
       tournament.formatLabel = updates.formatLabel != null && String(updates.formatLabel).trim()
         ? String(updates.formatLabel).trim().slice(0, 200) : null;
+      changed = true;
+    } else if (key === 'tournamentFormat') {
+      tournament.tournamentFormat = updates.tournamentFormat != null && String(updates.tournamentFormat).trim()
+        ? String(updates.tournamentFormat).trim().slice(0, 120) : null;
+      changed = true;
+    } else if (key === 'logoUrl') {
+      tournament.logoUrl = updates.logoUrl != null && String(updates.logoUrl).trim()
+        ? String(updates.logoUrl).trim().slice(0, 500) : null;
+      changed = true;
+    } else if (key === 'youtubeStreamUrl') {
+      tournament.youtubeStreamUrl = updates.youtubeStreamUrl != null && String(updates.youtubeStreamUrl).trim()
+        ? String(updates.youtubeStreamUrl).trim().slice(0, 500) : null;
+      changed = true;
+    } else if (key === 'registrationStartDate') {
+      tournament.registrationStartDate = parseOptionalDate(updates.registrationStartDate);
+      changed = true;
+    } else if (key === 'region') {
+      if (updates.region !== 'Asia' && updates.region !== 'Global') {
+        throw new Error('region must be Asia or Global');
+      }
+      tournament.region = updates.region;
       changed = true;
     } else {
       tournament[key] = updates[key];
@@ -529,9 +904,73 @@ const sendSpecialTournamentNotification = async (adminId, tournamentId, notifDat
 // User: Join (free)
 // ---------------------------------------------------------------------------
 
-/** Team size: 4 compulsory (leader + 3 players), max 5 (leader + 4 players). Only complete teams appear in list/round 1. */
+/** Min teammate names in `players` array for round-1 eligibility: leader + 3 = 4 total. Join may send 0–4; fill via PATCH /team before round 1. */
 const TEAM_PLAYERS_MIN = 3;
 const TEAM_PLAYERS_MAX = 4;
+
+/** True when registration is open to join (no start date or start time has passed). */
+const registrationPublicWindowStarted = (tournament, now = new Date()) => {
+  const st = tournament.registrationStartDate;
+  if (st == null) return true;
+  const d = new Date(st);
+  return !Number.isNaN(d.getTime()) && d <= now;
+};
+
+/**
+ * Whether a normal user should see this tournament in browse/list (not admin).
+ * Draft hidden; registration_open hidden until registrationPublicWindowStarted.
+ */
+const isSpecialTournamentDiscoverableByUsers = (tournament, now = new Date()) => {
+  const s = tournament.status;
+  if (s === 'draft') return false;
+  if (s === 'registration_open') return registrationPublicWindowStarted(tournament, now);
+  return ['running', 'completed', 'cancelled'].includes(s);
+};
+
+/**
+ * Non-admin: hide draft; hide registration_open before registrationStartDate unless user is already a participant.
+ */
+const assertSpecialTournamentVisibleToViewer = (tournament, { userId, isAdmin }) => {
+  if (isAdmin) return;
+  if (tournament.status === 'draft') {
+    throw new Error('Special tournament not found');
+  }
+  if (tournament.status === 'registration_open' && !registrationPublicWindowStarted(tournament)) {
+    const isParticipant = (tournament.participants || []).some(
+      (p) => p.toString() === String(userId)
+    );
+    if (!isParticipant) throw new Error('Special tournament not found');
+  }
+};
+
+/**
+ * Public bracket summary: total rounds + phase label (semifinal / final) per round for UI.
+ */
+const buildBracketOutline = (rounds) => {
+  const sorted = [...(rounds || [])].sort((a, b) => a.roundNumber - b.roundNumber);
+  const n = sorted.length;
+  return {
+    totalRounds: n,
+    rounds: sorted.map((r, index) => {
+      const isLast = index === n - 1;
+      const isSecondToLast = n >= 2 && index === n - 2;
+      const phase = isLast ? 'final' : isSecondToLast ? 'semifinal' : 'bracket';
+      const phaseLabel = isLast
+        ? 'Final'
+        : isSecondToLast
+          ? 'Semifinal'
+          : `Round ${index + 1}`;
+      return {
+        roundNumber: r.roundNumber,
+        roundName: r.roundName,
+        status: r.status,
+        phase,
+        phaseLabel
+      };
+    })
+  };
+};
+
 
 /** Returns only teams with at least 4 members (leader + 3 in players). Incomplete teams do not appear in list/round 1. */
 const getEligibleTeams = (registeredTeams) => {
@@ -540,20 +979,27 @@ const getEligibleTeams = (registeredTeams) => {
 
 /**
  * Join a special tournament (free — no wallet deduction).
- * Team must have 4–5 players (leader + 3 or 4 in players array). Only complete teams count for the list and round 1.
+ * Leader may register with 0–4 teammate names; round 1 slots use only teams with ≥3 names (4+ total with leader).
  * @param {string} userId
  * @param {string} tournamentId
  * @param {string} teamName
- * @param {Array}  [players] - Array of player name strings (3 or 4 required = 4 or 5 total with leader)
+ * @param {Array}  [players] - Teammate name strings (0–4); use updateSpecialTournamentTeamRoster to complete before round 1.
  * @returns {Promise<Object>} Updated tournament
  */
 const joinSpecialTournament = async (userId, tournamentId, teamName, players = []) => {
   const tournament = await SpecialTournament.findById(tournamentId);
   if (!tournament) throw new Error('Special tournament not found');
-  if (tournament.status !== 'registration_open') {
-    throw new Error(`Registration is not open. Tournament status: ${tournament.status}`);
+  if (tournament.status === 'draft') {
+    throw new Error('Special tournament not found');
   }
-  if (tournament.registrationDeadline && new Date() > new Date(tournament.registrationDeadline)) {
+  if (tournament.status !== 'registration_open') {
+    throw new Error('This tournament is not accepting registrations right now.');
+  }
+  const now = new Date();
+  if (tournament.registrationStartDate && now < new Date(tournament.registrationStartDate)) {
+    throw new Error('Registration has not started yet.');
+  }
+  if (tournament.registrationDeadline && now > new Date(tournament.registrationDeadline)) {
     throw new Error('Registration deadline has passed. You cannot join this tournament.');
   }
   if (tournament.isParticipant(userId)) {
@@ -567,8 +1013,10 @@ const joinSpecialTournament = async (userId, tournamentId, teamName, players = [
   }
 
   const playerList = (players || []).map(n => ({ name: String(n).trim() })).filter(p => p.name);
-  if (playerList.length < TEAM_PLAYERS_MIN || playerList.length > TEAM_PLAYERS_MAX) {
-    throw new Error(`Team must have 4 or 5 players (you provided ${playerList.length + 1} including you). 4 compulsory, max 5.`);
+  if (playerList.length > TEAM_PLAYERS_MAX) {
+    throw new Error(
+      `At most ${TEAM_PLAYERS_MAX} teammate names (${TEAM_PLAYERS_MAX + 1} players including you).`
+    );
   }
 
   // Check duplicate team name
@@ -585,7 +1033,54 @@ const joinSpecialTournament = async (userId, tournamentId, teamName, players = [
   });
 
   await tournament.save();
-  return tournament;
+
+  try {
+    await tryAutoAdvanceSpecialTournament(tournamentId);
+  } catch (advErr) {
+    Logger.warn('SpecialTournament tryAutoAdvance after join', { tournamentId, err: advErr.message });
+  }
+
+  return SpecialTournament.findById(tournamentId);
+};
+
+/**
+ * Leader updates teammate names while registration is open (0–4 names; need ≥3 for round-1 eligibility).
+ */
+const updateSpecialTournamentTeamRoster = async (userId, tournamentId, players = []) => {
+  const tournament = await SpecialTournament.findById(tournamentId);
+  if (!tournament) throw new Error('Special tournament not found');
+  if (tournament.status === 'draft') {
+    throw new Error('Special tournament not found');
+  }
+  if (tournament.status !== 'registration_open') {
+    throw new Error('You cannot update your roster for this tournament right now.');
+  }
+  const now = new Date();
+  if (tournament.registrationStartDate && now < new Date(tournament.registrationStartDate)) {
+    throw new Error('Registration has not started yet.');
+  }
+  if (tournament.registrationDeadline && now > new Date(tournament.registrationDeadline)) {
+    throw new Error('Registration deadline has passed. You cannot change your roster.');
+  }
+
+  const uid = userId.toString();
+  const team = tournament.registeredTeams.find((t) => t.leaderUserId.toString() === uid);
+  if (!team) {
+    throw new Error('You are not registered as a team leader in this tournament');
+  }
+
+  const playerList = (players || []).map((n) => ({ name: String(n).trim() })).filter((p) => p.name);
+  if (playerList.length > TEAM_PLAYERS_MAX) {
+    throw new Error(
+      `At most ${TEAM_PLAYERS_MAX} teammate names (${TEAM_PLAYERS_MAX + 1} players including you).`
+    );
+  }
+
+  team.players = playerList;
+  tournament.markModified('registeredTeams');
+  await tournament.save();
+
+  return SpecialTournament.findById(tournamentId);
 };
 
 // ---------------------------------------------------------------------------
@@ -622,7 +1117,9 @@ const startRound = async (adminId, tournamentId, roundNumber) => {
     // First round: use only complete teams (4+ members). Incomplete teams do not appear in the list.
     const eligible = getEligibleTeams(tournament.registeredTeams);
     if (eligible.length === 0) {
-      throw new Error('No complete teams (4+ players) found. At registration end only complete teams are eligible.');
+      throw new Error(
+        'No eligible teams (each team needs the leader plus at least 3 teammate names). Incomplete rosters cannot enter round 1.'
+      );
     }
     teamsForRound = eligible.map(t => ({
       leaderUserId: t.leaderUserId,
@@ -657,28 +1154,81 @@ const startRound = async (adminId, tournamentId, roundNumber) => {
     throw new Error(`No teams available for round ${roundNumber}`);
   }
 
+  const lobbyCap = maxTeamsPerSlotForGame(tournament.game);
   const { teamsPerSlot } = round;
+  const sizesFromRound = round.slotSizes && round.slotSizes.length > 0
+    ? round.slotSizes.map(s => parseInt(s, 10))
+    : null;
 
   // Shuffle teams for fair distribution
   const shuffled = [...teamsForRound].sort(() => Math.random() - 0.5);
 
-  // Split into slots of teamsPerSlot
   const slots = [];
-  for (let i = 0; i < shuffled.length; i += teamsPerSlot) {
-    const chunk = shuffled.slice(i, i + teamsPerSlot);
-    slots.push({
-      slotIndex: slots.length,
-      teams: chunk.map(t => ({
-        leaderUserId: t.leaderUserId,
-        teamName: t.teamName,
-        players: t.players
-      })),
-      matchResults: [],
-      qualifiedTeams: [],
-      status: 'pending',
-      room: { roomId: null, password: null },
-      hostId: null
-    });
+
+  if (sizesFromRound && sizesFromRound.length > 0) {
+    const sum = sizesFromRound.reduce((a, b) => a + b, 0);
+    if (sum !== shuffled.length) {
+      throw new Error(
+        `Round ${roundNumber}: slotSizes sum (${sum}) must equal team count for this round (${shuffled.length}). ` +
+          'Edit round slotSizes via PATCH config or wait until qualifiers match the plan.'
+      );
+    }
+    let offset = 0;
+    for (let si = 0; si < sizesFromRound.length; si++) {
+      const sz = sizesFromRound[si];
+      const chunk = shuffled.slice(offset, offset + sz);
+      offset += sz;
+      let inviteCap = 0;
+      if (round.inviteSlotCaps && round.inviteSlotCaps.length === sizesFromRound.length) {
+        inviteCap = Math.max(0, parseInt(round.inviteSlotCaps[si], 10) || 0);
+      }
+      slots.push({
+        slotIndex: slots.length,
+        teams: chunk.map(t => ({
+          leaderUserId: t.leaderUserId,
+          teamName: t.teamName,
+          players: t.players || [],
+          isInvite: false
+        })),
+        matchResults: [],
+        qualifiedTeams: [],
+        status: 'pending',
+        room: { roomId: null, password: null },
+        hostId: null,
+        maxInvites: inviteCap
+      });
+    }
+  } else {
+    const uniformInviteCap = Math.max(0, parseInt(round.inviteSlotsPerSlot, 10) || 0);
+    for (let i = 0; i < shuffled.length; i += teamsPerSlot) {
+      const chunk = shuffled.slice(i, i + teamsPerSlot);
+      slots.push({
+        slotIndex: slots.length,
+        teams: chunk.map(t => ({
+          leaderUserId: t.leaderUserId,
+          teamName: t.teamName,
+          players: t.players || [],
+          isInvite: false
+        })),
+        matchResults: [],
+        qualifiedTeams: [],
+        status: 'pending',
+        room: { roomId: null, password: null },
+        hostId: null,
+        maxInvites: uniformInviteCap
+      });
+    }
+  }
+
+  for (const s of slots) {
+    if (s.teams.length > lobbyCap) {
+      throw new Error(`Round ${roundNumber} slot ${s.slotIndex}: ${s.teams.length} teams exceeds lobby cap ${lobbyCap}`);
+    }
+    if (s.teams.length + s.maxInvites > lobbyCap) {
+      throw new Error(
+        `Round ${roundNumber} slot ${s.slotIndex}: qualified (${s.teams.length}) + max invites (${s.maxInvites}) exceeds lobby cap ${lobbyCap}`
+      );
+    }
   }
 
   round.slots = slots;
@@ -737,6 +1287,154 @@ const startRound = async (adminId, tournamentId, roundNumber) => {
       });
     });
   }
+
+  return tournament;
+};
+
+/**
+ * Auto-advance without requiring POST /round/:n/start:
+ * - registration_open + registrationDeadline passed → start first pending round (publish Round 1 groups).
+ * - running + previous round completed → start next pending round.
+ * Function declaration so join/list/detail can call it before this line in the file.
+ */
+async function tryAutoAdvanceSpecialTournament(tournamentId) {
+  let tournament = await SpecialTournament.findById(tournamentId);
+  if (!tournament) return null;
+  if (['draft', 'cancelled'].includes(tournament.status)) return tournament;
+
+  if (tournament.status === 'registration_open' && tournament.registrationDeadline) {
+    const deadline = new Date(tournament.registrationDeadline);
+    if (!Number.isNaN(deadline.getTime()) && new Date() >= deadline) {
+      const sorted = [...tournament.rounds].sort((a, b) => a.roundNumber - b.roundNumber);
+      const first = sorted[0];
+      if (first && first.status === 'pending') {
+        try {
+          await startRound(null, tournamentId, first.roundNumber);
+        } catch (err) {
+          Logger.warn('SpecialTournament tryAutoAdvance: first round start failed', {
+            tournamentId,
+            err: err.message
+          });
+        }
+        tournament = await SpecialTournament.findById(tournamentId);
+      }
+    }
+  }
+
+  if (tournament && tournament.status === 'running') {
+    const sorted = [...tournament.rounds].sort((a, b) => a.roundNumber - b.roundNumber);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (sorted[i].status === 'completed' && sorted[i + 1].status === 'pending') {
+        try {
+          await startRound(null, tournamentId, sorted[i + 1].roundNumber);
+        } catch (err) {
+          Logger.warn('SpecialTournament tryAutoAdvance: next round start failed', {
+            tournamentId,
+            nextRound: sorted[i + 1].roundNumber,
+            err: err.message
+          });
+        }
+        break;
+      }
+    }
+  }
+
+  return SpecialTournament.findById(tournamentId);
+}
+
+/**
+ * Admin adds a wildcard/invite team to a running round slot (before any match result is posted for that slot).
+ * Leader must not already be in the tournament; 0–4 names in players (same as join).
+ */
+const addInviteTeamToSlot = async (adminId, tournamentId, roundNumber, slotIndex, { leaderUserId, teamName, players = [] }) => {
+  const tournament = await SpecialTournament.findById(tournamentId);
+  if (!tournament) throw new Error('Special tournament not found');
+  if (['cancelled', 'completed'].includes(tournament.status)) {
+    throw new Error(`Cannot add invite. Tournament status: ${tournament.status}`);
+  }
+
+  const round = tournament.rounds.find(r => r.roundNumber === roundNumber);
+  if (!round) throw new Error(`Round ${roundNumber} not found`);
+  if (round.status !== 'running') {
+    throw new Error(`Round ${roundNumber} is not running (status: ${round.status}). Start the round first.`);
+  }
+
+  const slot = round.slots.find(s => s.slotIndex === slotIndex);
+  if (!slot) throw new Error(`Slot ${slotIndex} not found in round ${roundNumber}`);
+
+  if ((slot.matchResults || []).length > 0) {
+    throw new Error('Cannot add invites after match results have been submitted for this slot');
+  }
+
+  const lobbyCap = maxTeamsPerSlotForGame(tournament.game);
+  const inviteUsed = (slot.teams || []).filter(t => t.isInvite === true).length;
+  const maxInv = slot.maxInvites != null ? slot.maxInvites : 0;
+  if (maxInv <= 0) {
+    throw new Error(
+      'This slot does not accept invite teams. Configure inviteSlotCaps (with slotSizes) or inviteSlotsPerSlot on the round.'
+    );
+  }
+  if (inviteUsed >= maxInv) {
+    throw new Error(`Invite cap reached for this slot (${maxInv})`);
+  }
+  if (slot.teams.length >= lobbyCap) {
+    throw new Error(`Slot is full (${lobbyCap} max for ${tournament.game})`);
+  }
+
+  if (!teamName || typeof teamName !== 'string' || !teamName.trim()) {
+    throw new Error('teamName is required');
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(leaderUserId)) {
+    throw new Error('Invalid leaderUserId');
+  }
+  const leaderOid = new mongoose.Types.ObjectId(leaderUserId);
+
+  if (tournament.isParticipant(leaderOid)) {
+    throw new Error('This user is already registered in the tournament');
+  }
+
+  const nameTaken = tournament.registeredTeams.some(
+    t => t.teamName.trim().toLowerCase() === teamName.trim().toLowerCase()
+  );
+  if (nameTaken) throw new Error(`Team name "${teamName}" is already taken`);
+
+  const playerList = (players || []).map(n => ({ name: String(n).trim() })).filter(p => p.name);
+  if (playerList.length > TEAM_PLAYERS_MAX) {
+    throw new Error(
+      `Invite team: at most ${TEAM_PLAYERS_MAX} teammate names (${TEAM_PLAYERS_MAX + 1} including leader).`
+    );
+  }
+
+  slot.teams.push({
+    leaderUserId: leaderOid,
+    teamName: teamName.trim(),
+    players: playerList,
+    isInvite: true
+  });
+
+  tournament.participants.push(leaderOid);
+  tournament.registeredTeams.push({
+    leaderUserId: leaderOid,
+    teamName: teamName.trim(),
+    players: playerList,
+    isInvite: true
+  });
+
+  await tournament.save();
+
+  broadcastSpecialTournamentEvent(
+    tournament._id.toString(),
+    'special-tournament:config-updated',
+    {
+      type: 'invite-added',
+      roundNumber,
+      slotIndex,
+      teamName: teamName.trim(),
+      leaderUserId: leaderOid.toString()
+    },
+    { participantIds: tournament.participants }
+  );
 
   return tournament;
 };
@@ -1000,6 +1698,17 @@ const submitSlotFinalResult = async (hostUserId, tournamentId, roundNumber, slot
 
   await tournament.save();
 
+  try {
+    await tryAutoAdvanceSpecialTournament(tournamentId);
+  } catch (advErr) {
+    Logger.warn('SpecialTournament tryAutoAdvance after slot final result', {
+      tournamentId,
+      err: advErr.message
+    });
+  }
+
+  const tournamentAfterAdvance = await SpecialTournament.findById(tournamentId);
+
   // Notify slot participants of final standings + qualification
   const slotParticipantIds = (slot.teams || []).map(t => t.leaderUserId);
   broadcastSpecialTournamentEvent(
@@ -1060,7 +1769,7 @@ const submitSlotFinalResult = async (hostUserId, tournamentId, roundNumber, slot
   }
 
   return {
-    tournament,
+    tournament: tournamentAfterAdvance || tournament,
     standings,
     qualifiedTeams: qualifiedUserIds,
     qualifiedCount: qualifiedUserIds.length
@@ -1132,6 +1841,11 @@ const distributeRewards = async (adminId, tournamentId) => {
   const winners = [];
   const prizePool = tournament.prizePool;
 
+  const breakdownByPos = {};
+  (tournament.rankRewardBreakdown || []).forEach((row) => {
+    breakdownByPos[row.position] = row.amount;
+  });
+
   // Use admin/host-declared final ranking if set; otherwise use aggregated standings
   const rankingSource = (tournament.declaredFinalRanking && tournament.declaredFinalRanking.length > 0)
     ? tournament.declaredFinalRanking
@@ -1151,7 +1865,9 @@ const distributeRewards = async (adminId, tournamentId) => {
       continue;
     }
 
-    const rewardINR = roundInr((prizePool * dist.percent) / 100);
+    const rewardINR = breakdownByPos[dist.position] != null
+      ? roundInr(breakdownByPos[dist.position])
+      : roundInr((prizePool * dist.percent) / 100);
     if (rewardINR <= 0) continue;
 
     try {
@@ -1282,13 +1998,59 @@ const declareFinalRanking = async (adminId, tournamentId, ranking) => {
  * @param {number} [skip=0]
  * @returns {Promise<{ tournaments, total }>}
  */
-const getSpecialTournamentList = async (filters = {}, limit = 20, skip = 0) => {
+const getSpecialTournamentList = async (filters = {}, limit = 20, skip = 0, options = {}) => {
+  const forAdmin = Boolean(options.forAdmin);
+  const now = new Date();
+
   const query = {};
-  if (filters.status) query.status = filters.status;
   if (filters.mode) query.mode = filters.mode;
   if (filters.subMode) query.subMode = filters.subMode;
 
-  const [tournaments, total] = await Promise.all([
+  if (forAdmin) {
+    if (filters.status) query.status = filters.status;
+  } else if (filters.status === 'draft') {
+    query._id = { $in: [] };
+  } else if (filters.status === 'registration_open') {
+    query.status = 'registration_open';
+    query.$and = [
+      {
+        $or: [
+          { registrationStartDate: null },
+          { registrationStartDate: { $exists: false } },
+          { registrationStartDate: { $lte: now } }
+        ]
+      }
+    ];
+  } else if (filters.status) {
+    query.status = filters.status;
+  } else {
+    query.$or = [
+      { status: 'running' },
+      { status: 'completed' },
+      { status: 'cancelled' },
+      {
+        status: 'registration_open',
+        $or: [
+          { registrationStartDate: null },
+          { registrationStartDate: { $exists: false } },
+          { registrationStartDate: { $lte: now } }
+        ]
+      }
+    ];
+  }
+
+  let [tournaments, total] = await Promise.all([
+    SpecialTournament.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip(skip)
+      .select('-rounds.slots.matchResults -registeredTeams')
+      .lean(),
+    SpecialTournament.countDocuments(query)
+  ]);
+
+  await Promise.all((tournaments || []).map(t => tryAutoAdvanceSpecialTournament(t._id.toString())));
+  [tournaments, total] = await Promise.all([
     SpecialTournament.find(query)
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -1307,13 +2069,137 @@ const getSpecialTournamentList = async (filters = {}, limit = 20, skip = 0) => {
  * @returns {Promise<Object>}
  */
 const getSpecialTournamentDetails = async (tournamentId) => {
+  await tryAutoAdvanceSpecialTournament(tournamentId);
   const tournament = await SpecialTournament.findById(tournamentId)
     .populate('createdBy', 'name email')
     .populate('participants', 'name ign')
     .lean();
 
   if (!tournament) throw new Error('Special tournament not found');
-  return tournament;
+  return {
+    ...tournament,
+    bracketOutline: buildBracketOutline(tournament.rounds)
+  };
+};
+
+/**
+ * Admin: dynamic lobby cap + per-round invite headroom (no hardcoded game advice).
+ * Marks second-to-last round as typical semifinal stage for UI copy.
+ * @param {string} tournamentId
+ * @returns {Promise<Object>}
+ */
+const getSpecialTournamentCapacityHints = async (tournamentId) => {
+  await tryAutoAdvanceSpecialTournament(tournamentId);
+  const tournament = await SpecialTournament.findById(tournamentId).lean();
+  if (!tournament) throw new Error('Special tournament not found');
+
+  const lobbyCap = maxTeamsPerSlotForGame(tournament.game);
+  const sorted = [...(tournament.rounds || [])].sort((a, b) => a.roundNumber - b.roundNumber);
+  const total = sorted.length;
+
+  const rounds = sorted.map((r, index) => {
+    const isLast = index === total - 1;
+    const isSecondToLast = total >= 2 && index === total - 2;
+    const phaseHint = isLast
+      ? { kind: 'final_round', label: 'Last configured round (typically final)' }
+      : isSecondToLast
+        ? {
+            kind: 'semi_final_stage',
+            label: 'Second-to-last round — commonly semifinals; invite wildcards use headroom below'
+          }
+        : { kind: 'bracket_round', label: `Round ${index + 1} of ${total}` };
+
+    const slotSizes = r.slotSizes && r.slotSizes.length > 0 ? r.slotSizes.map(x => Number(x)) : null;
+    const slotHints = [];
+
+    if (slotSizes) {
+      slotSizes.forEach((qualifiedCount, si) => {
+        const maxInvitesAllowed = Math.max(0, lobbyCap - qualifiedCount);
+        const configured = (r.inviteSlotCaps && r.inviteSlotCaps[si] != null)
+          ? Math.max(0, Number(r.inviteSlotCaps[si]) || 0)
+          : 0;
+        slotHints.push({
+          slotIndex: si,
+          qualifiedTeamsInPlan: qualifiedCount,
+          lobbyCapForGame: lobbyCap,
+          maxInvitesAllowed,
+          inviteCapConfigured: configured,
+          configOk: configured <= maxInvitesAllowed,
+          adminMessage: configured > maxInvitesAllowed
+            ? `inviteSlotCaps[${si}] is ${configured} but only ${maxInvitesAllowed} invite(s) fit (lobby cap ${lobbyCap} − ${qualifiedCount} qualified in this bucket). Lower invites or lower qualified count in this slot.`
+            : maxInvitesAllowed > 0
+              ? `After this round starts, up to ${maxInvitesAllowed} invite team(s) can be added here (you configured cap ${configured}).`
+              : 'No invite headroom: qualified teams already fill this game’s lobby cap for this bucket.'
+        });
+      });
+    } else {
+      const tps = Number(r.teamsPerSlot) || 0;
+      const maxInv = Math.max(0, lobbyCap - tps);
+      const configured = Math.max(0, Number(r.inviteSlotsPerSlot) || 0);
+      slotHints.push({
+        layout: 'uniform_chunks',
+        teamsPerSlot: tps,
+        lobbyCapForGame: lobbyCap,
+        maxInvitesPerFullSlot: maxInv,
+        inviteSlotsPerSlotConfigured: configured,
+        configOk: configured <= maxInv,
+        adminMessage: configured > maxInv
+          ? `inviteSlotsPerSlot (${configured}) is above allowed ${maxInv} for full groups (cap ${lobbyCap} − teamsPerSlot ${tps}).`
+          : maxInv > 0
+            ? `Uniform groups: up to ${maxInv} invite(s) per full slot possible; configured ${configured}. The last group may be smaller — check live counts after start.`
+            : 'No invite headroom for standard full slots at current teamsPerSlot.'
+      });
+    }
+
+    let liveSlots = null;
+    if (r.status === 'running' && r.slots && r.slots.length > 0) {
+      liveSlots = r.slots.map(s => {
+        const teams = s.teams || [];
+        const n = teams.length;
+        const invUsed = teams.filter(t => t.isInvite === true).length;
+        const maxI = s.maxInvites != null ? s.maxInvites : 0;
+        const matchStarted = (s.matchResults || []).length > 0;
+        const addableNow = Math.max(0, Math.min(maxI - invUsed, lobbyCap - n));
+        return {
+          slotIndex: s.slotIndex,
+          currentTeamCount: n,
+          lobbyCapForGame: lobbyCap,
+          invitesUsed: invUsed,
+          inviteCap: maxI,
+          invitesRemaining: Math.max(0, maxI - invUsed),
+          seatsFreeBeforeCap: Math.max(0, lobbyCap - n),
+          canAddInviteNow: !matchStarted && addableNow > 0,
+          addableInviteCount: addableNow,
+          adminMessage: matchStarted
+            ? 'Match results started — invites locked for this slot.'
+            : (addableNow > 0
+              ? `You can add ${addableNow} invite team(s) here now (under invite cap and lobby cap).`
+              : 'No invite slots left or lobby is full for this group.')
+        };
+      });
+    }
+
+    return {
+      roundNumber: r.roundNumber,
+      roundName: r.roundName,
+      status: r.status,
+      matchesPerSlot: r.matchesPerSlot,
+      qualifyPerSlot: r.qualifyPerSlot,
+      phaseHint,
+      slots: slotHints,
+      liveSlots
+    };
+  });
+
+  return {
+    tournamentId: tournament._id.toString(),
+    title: tournament.title,
+    game: tournament.game,
+    lobbyCapForGame: lobbyCap,
+    totalRounds: total,
+    summaryForAdmin: `This tournament uses game "${tournament.game}" → in-match lobby cap ${lobbyCap} teams per group. Invite counts are computed from that cap minus qualified teams per slot.`,
+    rounds
+  };
 };
 
 /**
@@ -1323,6 +2209,7 @@ const getSpecialTournamentDetails = async (tournamentId) => {
  * @returns {Promise<Object>}
  */
 const getSpecialTournamentAdminReport = async (tournamentId) => {
+  await tryAutoAdvanceSpecialTournament(tournamentId);
   const tournament = await SpecialTournament.findById(tournamentId)
     .populate('createdBy', 'name email')
     .lean();
@@ -1400,8 +2287,13 @@ const getSpecialTournamentAdminReport = async (tournamentId) => {
  * @returns {Promise<Object>}
  */
 const getSpecialTournamentDetailsForUser = async (tournamentId, userId) => {
+  await tryAutoAdvanceSpecialTournament(tournamentId);
   const tournament = await SpecialTournament.findById(tournamentId).lean();
   if (!tournament) throw new Error('Special tournament not found');
+
+  assertSpecialTournamentVisibleToViewer(tournament, { userId, isAdmin: false });
+
+  const bracketOutline = buildBracketOutline(tournament.rounds);
 
   const isParticipant = tournament.participants.some(p => p.toString() === userId.toString());
 
@@ -1438,10 +2330,30 @@ const getSpecialTournamentDetailsForUser = async (tournamentId, userId) => {
   }));
 
   const eligibleCount = getEligibleTeams(tournament.registeredTeams || []).length;
+
+  let myTeam = null;
+  if (isParticipant) {
+    const rt = (tournament.registeredTeams || []).find(
+      (t) => t.leaderUserId.toString() === userId.toString()
+    );
+    if (rt) {
+      const tc = (rt.players || []).length;
+      myTeam = {
+        teamName: rt.teamName,
+        players: (rt.players || []).map((p) => p.name),
+        teammateNamesCount: tc,
+        isEligibleForRound1: tc >= TEAM_PLAYERS_MIN,
+        teammatesNeededForRound1: Math.max(0, TEAM_PLAYERS_MIN - tc)
+      };
+    }
+  }
+
   return {
     ...tournament,
     rounds: safeRounds,
+    bracketOutline,
     isParticipant,
+    myTeam,
     userSlotInfo,
     participantCount: tournament.participants.length,
     eligibleTeamCount: eligibleCount
@@ -1487,12 +2399,14 @@ const getSlotLiveResults = async (tournamentId, roundNumber, slotIndex) => {
 };
 
 module.exports = {
+  buildAutoRoundsFromBracket,
   createSpecialTournament,
   openRegistration,
   cancelSpecialTournament,
   updateTournamentConfig,
   sendSpecialTournamentNotification,
   joinSpecialTournament,
+  updateSpecialTournamentTeamRoster,
   startRound,
   assignSlotHost,
   updateSlotRoom,
@@ -1503,9 +2417,14 @@ module.exports = {
   getSpecialTournamentDetails,
   getSpecialTournamentDetailsForUser,
   getSpecialTournamentAdminReport,
+  getSpecialTournamentCapacityHints,
   getSlotLiveResults,
   aggregateSlotStandings,
   formatSlotMatchResults,
   getEligibleTeams,
-  declareFinalRanking
+  declareFinalRanking,
+  addInviteTeamToSlot,
+  registrationPublicWindowStarted,
+  isSpecialTournamentDiscoverableByUsers,
+  assertSpecialTournamentVisibleToViewer
 };

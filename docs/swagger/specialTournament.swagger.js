@@ -24,7 +24,7 @@
  *           type: integer
  *           minimum: 2
  *           example: 12
- *           description: How many teams are grouped into each slot
+ *           description: Teams per slot (max 12 for Free Fire, 16 for BGMI per in-game match)
  *         matchesPerSlot:
  *           type: integer
  *           minimum: 1
@@ -35,6 +35,24 @@
  *           minimum: 1
  *           example: 6
  *           description: Top N teams that qualify from each slot to the next round
+ *         slotSizes:
+ *           type: array
+ *           items:
+ *             type: integer
+ *             minimum: 2
+ *           description: |
+ *             Optional exact lobby sizes for this round; sum must equal team count when the round starts (e.g. semis 12+12+6 = 30).
+ *             If set, `teamsPerSlot` should be max(slotSizes); qualifyPerSlot must be less than min(slotSizes).
+ *         inviteSlotCaps:
+ *           type: array
+ *           items:
+ *             type: integer
+ *             minimum: 0
+ *           description: Max admin invite teams per slot index (same length as slotSizes). qualified + invites per slot must not exceed game lobby cap (12 FF / 16 BGMI).
+ *         inviteSlotsPerSlot:
+ *           type: integer
+ *           minimum: 0
+ *           description: When not using slotSizes, same invite cap for every slot in this round
  *     PrizeDistribution:
  *       type: object
  *       properties:
@@ -48,6 +66,40 @@
  *           maximum: 100
  *           example: 50
  *           description: Percentage of prizePool for this position
+ *     RankRewardRow:
+ *       type: object
+ *       required: [position, amount]
+ *       properties:
+ *         position:
+ *           type: integer
+ *           minimum: 1
+ *         amount:
+ *           type: number
+ *           minimum: 0
+ *           description: Reward for this rank; rankRewards rows must sum to prizePool
+ *     SponsorEntry:
+ *       type: object
+ *       properties:
+ *         name: { type: string, maxLength: 100 }
+ *         logoUrl: { type: string, maxLength: 500 }
+ *         link: { type: string, maxLength: 500 }
+ *     BracketAuto:
+ *       type: object
+ *       required: [qualifyPerSlot]
+ *       description: |
+ *         Auto-build rounds from maxSlots and game lobby size (Free Fire 12, BGMI 16 per match).
+ *         Use with mode BR and game set. Do not send `rounds` together with bracketAuto.
+ *       properties:
+ *         qualifyPerSlot:
+ *           type: integer
+ *           minimum: 1
+ *           example: 4
+ *           description: Top N teams qualify from each lobby each round (must be less than lobby size)
+ *         matchesPerSlot:
+ *           type: integer
+ *           minimum: 1
+ *           default: 3
+ *           description: BR matches played per lobby per round
  *     SpecialTournament:
  *       type: object
  *       properties:
@@ -71,6 +123,28 @@
  *         region:
  *           type: string
  *           enum: [Asia, Global]
+ *           default: Global
+ *         registrationStartDate:
+ *           type: string
+ *           format: date-time
+ *         tournamentFormat:
+ *           type: string
+ *           maxLength: 120
+ *         logoUrl:
+ *           type: string
+ *           maxLength: 500
+ *         youtubeStreamUrl:
+ *           type: string
+ *           maxLength: 500
+ *         sponsors:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/SponsorEntry'
+ *         rankRewardBreakdown:
+ *           type: array
+ *           description: Per-rank reward amounts (computed from prizeDistribution or from rankRewards at create)
+ *           items:
+ *             $ref: '#/components/schemas/RankRewardRow'
  *         prizePool:
  *           type: number
  *           example: 5000
@@ -127,7 +201,7 @@
  *           type: boolean
  *         eligibleTeamCount:
  *           type: integer
- *           description: Teams with 4+ players (only these appear in list and round 1)
+ *           description: Teams with ≥3 teammate names in roster (4+ including leader); only these enter round 1
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -145,9 +219,13 @@
  *     description: |
  *       Creates a new special/sponsored tournament with free entry and a fixed prize pool.
  *       - Entry fee is always 0 — no GC is deducted from users
- *       - Admin defines rounds config, prize pool, and prize distribution
+ *       - Admin defines rounds (teamsPerSlot, matchesPerSlot, qualifyPerSlot per round), dates, branding, sponsors, and prize split
+ *       - Either **prizeDistribution** (percent per rank) or **rankRewards** (fixed amounts summing to prizePool)
+ *       - Either manual **rounds[]** or **bracketAuto** — auto plans round count, lobbies, and qualify counts from maxSlots + game (12 FF / 16 BGMI)
+ *       - Default **region** is Global if omitted
  *       - LW (Lone Wolf) mode is NOT supported
- *       - Tournament starts in 'draft' status; use /open-registration to accept participants
+ *       - Tournament is created with **registration_open**; set registration window via dates on this request. No separate call needed to start registration.
+ *       - **Tournament play** (round 1 groups, schedule): after **registrationDeadline** passes, use `POST …/round/{roundNum}/start` (or rely on auto-advance when configured). Legacy **/open-registration** only for old **draft** rows.
  *
  *       **Example: 180 Teams, 5000 GC Prize Pool**
  *       ```
@@ -165,7 +243,7 @@
  *         application/json:
  *           schema:
  *             type: object
- *             required: [title, mode, subMode, prizePool, maxSlots, rounds]
+ *             required: [title, mode, subMode, prizePool, maxSlots]
  *             properties:
  *               title:
  *                 type: string
@@ -184,7 +262,8 @@
  *               region:
  *                 type: string
  *                 enum: [Asia, Global]
- *                 example: Asia
+ *                 default: Global
+ *                 example: Global
  *               lobbyName:
  *                 type: string
  *                 example: "BX Grand Champ S1"
@@ -195,9 +274,16 @@
  *               maxSlots:
  *                 type: integer
  *                 example: 180
- *                 description: Max total teams allowed to register
+ *                 description: Max total teams allowed to register (slot layout follows round 1 teamsPerSlot)
+ *               tournamentFormat:
+ *                 type: string
+ *                 maxLength: 120
+ *                 example: "Multi-round BR slots, single final"
+ *               bracketAuto:
+ *                 $ref: '#/components/schemas/BracketAuto'
  *               rounds:
  *                 type: array
+ *                 description: Manual round config; omit when using bracketAuto
  *                 items:
  *                   $ref: '#/components/schemas/RoundConfig'
  *                 example:
@@ -218,6 +304,7 @@
  *                     qualifyPerSlot: 1
  *               prizeDistribution:
  *                 type: array
+ *                 description: Percent per final rank; total percent must not exceed 100. Omit if using rankRewards instead.
  *                 items:
  *                   $ref: '#/components/schemas/PrizeDistribution'
  *                 example:
@@ -227,6 +314,33 @@
  *                     percent: 30
  *                   - position: 3
  *                     percent: 20
+ *               rankRewards:
+ *                 type: array
+ *                 description: Fixed reward per rank; amounts must sum exactly to prizePool (alternative to prizeDistribution)
+ *                 items:
+ *                   $ref: '#/components/schemas/RankRewardRow'
+ *               registrationPeriodStart:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Registration window start (alias registrationStartDate)
+ *               registrationPeriodEnd:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Registration window end (alias registrationDeadline)
+ *               registrationStartDate:
+ *                 type: string
+ *                 format: date-time
+ *               registrationDeadline:
+ *                 type: string
+ *                 format: date-time
+ *               tournamentStartDate:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Tournament run start (alias scheduledDate)
+ *               tournamentEndDate:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Tournament run end (alias scheduledEndDate)
  *               scheduledDate:
  *                 type: string
  *                 format: date-time
@@ -234,13 +348,22 @@
  *               scheduledTime:
  *                 type: string
  *                 example: "18:00"
- *               registrationDeadline:
- *                 type: string
- *                 format: date-time
  *               scheduledEndDate:
  *                 type: string
  *                 format: date-time
  *                 description: Tournament end date (when tournament runs till)
+ *               logoUrl:
+ *                 type: string
+ *                 maxLength: 500
+ *                 description: Tournament logo URL (upload elsewhere, pass URL here)
+ *               youtubeStreamUrl:
+ *                 type: string
+ *                 maxLength: 500
+ *                 description: Live or VOD YouTube link (optional; separate from sponsorHandles.youtube channel/handle)
+ *               sponsors:
+ *                 type: array
+ *                 items:
+ *                   $ref: '#/components/schemas/SponsorEntry'
  *               description:
  *                 type: string
  *                 example: "Grand championship with 5000 GC prize pool"
@@ -260,7 +383,7 @@
  *                   whatsapp: { type: string, maxLength: 200 }
  *     responses:
  *       201:
- *         description: Tournament created in draft status
+ *         description: Tournament created with registration_open; users can join per registrationStartDate/registrationDeadline
  *         content:
  *           application/json:
  *             schema:
@@ -274,7 +397,7 @@
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Special tournament created successfully
+ *                   example: Special tournament created. Registration is open; join is allowed per registrationStartDate / registrationDeadline.
  *                 data:
  *                   type: object
  *                   properties:
@@ -294,8 +417,11 @@
  * @swagger
  * /api/special-tournament/{id}/open-registration:
  *   post:
- *     summary: Open registration for a tournament (Admin only)
- *     description: Changes tournament status from 'draft' to 'registration_open'. Users can then join for free.
+ *     summary: Open registration (legacy / Admin only)
+ *     description: |
+ *       New tournaments are created **registration_open** already — you normally skip this.
+ *       Use only to flip an old **draft** tournament to open, or if status was fixed manually.
+ *       If already **registration_open**, returns success (idempotent).
  *     tags: [Special Tournament]
  *     security:
  *       - bearerAuth: []
@@ -309,7 +435,7 @@
  *       200:
  *         description: Registration opened
  *       400:
- *         description: Tournament not in draft status
+ *         description: Not draft and not already registration_open (e.g. running/completed)
  *       403:
  *         description: Admin access required
  */
@@ -364,6 +490,8 @@
  *       - Round 2+: uses qualifiedTeams from all completed slots of the previous round
  *       - Teams are randomly shuffled before assignment
  *       - If teams don't divide evenly, the last slot gets fewer teams
+ *       - If the round has **slotSizes** (e.g. [12,12,6]), teams are split in that order; sum(slotSizes) must equal the number of teams in the round.
+ *       - **maxInvites** per slot comes from inviteSlotCaps or inviteSlotsPerSlot; admin adds teams via add-invite-team before match results.
  *     tags: [Special Tournament]
  *     security:
  *       - bearerAuth: []
@@ -422,6 +550,84 @@
  *         description: Round already started or previous round not completed
  *       403:
  *         description: Admin access required
+ */
+
+/**
+ * @swagger
+ * /api/special-tournament/{id}/round/{roundNum}/slot/{slotIdx}/add-invite-team:
+ *   post:
+ *     summary: Add invite/wildcard team to a slot (Admin only)
+ *     description: |
+ *       Before any match result is posted for that slot. Leader must not already be in the tournament.
+ *       Same roster limits as join (0–4 teammate names in `players`). Respects slot maxInvites and game lobby cap.
+ *     tags: [Special Tournament]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: roundNum
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: path
+ *         name: slotIdx
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [leaderUserId, teamName]
+ *             properties:
+ *               leaderUserId:
+ *                 type: string
+ *               teamName:
+ *                 type: string
+ *               players:
+ *                 type: array
+ *                 maxItems: 4
+ *                 items:
+ *                   type: string
+ *                 description: Optional; 0–4 teammate names
+ *     responses:
+ *       200:
+ *         description: Invite added
+ *       400:
+ *         description: Cap reached, slot full, or match results already submitted
+ */
+
+/**
+ * @swagger
+ * /api/special-tournament/{id}/capacity-hints:
+ *   get:
+ *     summary: Admin — dynamic lobby cap & invite headroom per round
+ *     description: |
+ *       Uses the tournament’s **game** to derive max teams per in-game lobby (e.g. catalogue limits).
+ *       For each round: shows **maxInvitesAllowed** per slot plan, whether configured caps are valid,
+ *       and **phaseHint** (`semi_final_stage` for second-to-last round, `final_round` for last).
+ *       Running rounds also return **liveSlots** with how many invites can still be added now.
+ *     tags: [Special Tournament]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Capacity breakdown for admin UI
+ *       403:
+ *         description: Admin only
  */
 
 // ---------------------------------------------------------------------------
@@ -819,10 +1025,12 @@
  *     description: |
  *       Register for a sponsored tournament. Entry is completely free — no GC is deducted.
  *       Tournament must be in 'registration_open' status.
+ *
+ *       **Roster:** Send `players` as 0–4 teammate names (you are the leader). Round 1 only includes teams with **≥3** teammate names (4+ players including you). Use `PATCH /api/special-tournament/{id}/team` to add names before registration ends / round 1 starts.
  *       
  *       **Real-time Updates:**
- *       After successfully joining, a WebSocket event `tournament:status-updated` is broadcasted to all subscribers.
- *       The event includes `joinedTeams` count which updates in real-time. Subscribe via `subscribe:tournament` or `subscribe:user-tournaments` to receive updates.
+ *       After successfully joining, a WebSocket event `tournament:status-updated` is broadcast to all subscribers (`joinedTeams`, etc.).
+ *       **SSE:** `GET /api/special-tournament/{id}/stream` sends `event: snapshot` on connect and `event: update` on each join — use when you prefer `EventSource` over sockets.
  *     tags: [Special Tournament]
  *     security:
  *       - bearerAuth: []
@@ -838,19 +1046,18 @@
  *         application/json:
  *           schema:
  *             type: object
- *             required: [teamName, players]
+ *             required: [teamName]
  *             properties:
  *               teamName:
  *                 type: string
  *                 example: "Team Alpha"
  *               players:
  *                 type: array
- *                 minItems: 3
  *                 maxItems: 4
  *                 items:
  *                   type: string
  *                 example: ["Player1", "Player2", "Player3"]
- *                 description: 3 or 4 player names (4 or 5 total with leader). 4 compulsory, max 5. Only complete teams appear in list and round 1.
+ *                 description: 0–4 teammate names; need ≥3 for round 1 slot eligibility
  *     responses:
  *       200:
  *         description: Successfully registered
@@ -872,8 +1079,54 @@
  *                       type: integer
  *                     maxSlots:
  *                       type: integer
+ *                     roster:
+ *                       type: object
+ *                       properties:
+ *                         teammateNamesCount:
+ *                           type: integer
+ *                         isEligibleForRound1:
+ *                           type: boolean
+ *                         teammatesNeededForRound1:
+ *                           type: integer
  *       400:
  *         description: Already registered, tournament full, registration not open, or registration deadline passed
+ */
+
+/**
+ * @swagger
+ * /api/special-tournament/{id}/team:
+ *   patch:
+ *     summary: Update team roster (leader only, during registration)
+ *     description: |
+ *       Replace the list of teammate names (0–4). Same rules as join: round 1 uses only teams with ≥3 teammate names.
+ *       Only while `registration_open` and within the registration window.
+ *     tags: [Special Tournament]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               players:
+ *                 type: array
+ *                 maxItems: 4
+ *                 items:
+ *                   type: string
+ *                 example: ["P1", "P2", "P3"]
+ *     responses:
+ *       200:
+ *         description: Roster updated
+ *       400:
+ *         description: Not a leader, wrong status, or deadline passed
  */
 
 // ---------------------------------------------------------------------------
@@ -987,7 +1240,9 @@
  * /api/special-tournament/list:
  *   get:
  *     summary: List special tournaments
- *     description: Get paginated list of special/sponsored tournaments with optional filters.
+ *     description: |
+ *       Paginated list with optional filters.
+ *       **Non-admin:** `draft` never appears. `registration_open` rows appear only after `registrationStartDate` (if set) — same moment users can join. Admins see all statuses and scheduled registrations.
  *     tags: [Special Tournament]
  *     security:
  *       - bearerAuth: []
@@ -1056,13 +1311,51 @@
 
 /**
  * @swagger
+ * /api/special-tournament/{id}/stream:
+ *   get:
+ *     summary: SSE — live join count and status for this special tournament
+ *     description: |
+ *       Server-Sent Events. On connect: `event: snapshot` with `joinedTeams`, `status`, `maxSlots`, `title`.
+ *       After each successful `POST …/join`, subscribers receive `event: update` with the same fields
+ *       (aligns with WebSocket `tournament:status-updated` for `isSpecial` clients).
+ *       Auth: `Authorization: Bearer` or query `access_token` (browser `EventSource` cannot send Bearer).
+ *     tags: [Special Tournament]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: access_token
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: JWT when Authorization header cannot be set (e.g. browser EventSource)
+ *     produces:
+ *       - text/event-stream
+ *     responses:
+ *       200:
+ *         description: text/event-stream — events `snapshot`, `update`, `error`
+ *         content:
+ *           text/event-stream:
+ *             schema:
+ *               type: string
+ *       401:
+ *         description: Missing or invalid token
+ */
+
+/**
+ * @swagger
  * /api/special-tournament/{id}:
  *   get:
  *     summary: Get tournament details
  *     description: |
- *       Get full tournament details.
+ *       Get full tournament details. After **join**, call this again (or rely on join response) to refresh UI.
  *       - Admin sees all rounds, slots, match results, and team lists
- *       - Regular users see a safe view with their slot/room info if in a running round
+ *       - Regular users: `isParticipant`, **`myTeam`** (leader’s squad + round-1 eligibility), `bracketOutline`, `eligibleTeamCount`, `participantCount`, `userSlotInfo` when a round is running (room/password)
  *     tags: [Special Tournament]
  *     security:
  *       - bearerAuth: []
@@ -1090,6 +1383,23 @@
  *                           properties:
  *                             isParticipant:
  *                               type: boolean
+ *                             myTeam:
+ *                               type: object
+ *                               nullable: true
+ *                               description: Set when the current user is the registered leader — teamName, teammate names, and whether the squad is eligible for round 1
+ *                               properties:
+ *                                 teamName:
+ *                                   type: string
+ *                                 players:
+ *                                   type: array
+ *                                   items:
+ *                                     type: string
+ *                                 teammateNamesCount:
+ *                                   type: integer
+ *                                 isEligibleForRound1:
+ *                                   type: boolean
+ *                                 teammatesNeededForRound1:
+ *                                   type: integer
  *                             userSlotInfo:
  *                               type: object
  *                               nullable: true

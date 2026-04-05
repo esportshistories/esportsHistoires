@@ -7,6 +7,7 @@ const express = require('express');
 const { body, query, param } = require('express-validator');
 const { validate } = require('../middleware/validation.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
+const { authenticateUserSse } = require('../middleware/sseUserAuth.middleware');
 const { isAdmin } = require('../middleware/admin.middleware');
 const {
   createSpecialTournament,
@@ -15,6 +16,7 @@ const {
   updateTournamentConfig,
   sendSpecialTournamentNotification,
   startRound,
+  addInviteTeamToSlot,
   assignSlotHost,
   distributeRewards,
   declareFinalRanking,
@@ -24,8 +26,11 @@ const {
   getSpecialTournamentList,
   getSpecialTournamentDetails,
   getSpecialTournamentAdminReport,
+  getSpecialTournamentCapacityHints,
   getSlotLiveResults,
-  joinSpecialTournament
+  joinSpecialTournament,
+  updateSpecialTournamentTeamRoster,
+  streamSpecialTournament
 } = require('../controllers/specialTournament.controller');
 
 const router = express.Router();
@@ -63,11 +68,12 @@ router.get(
   getSlotLiveResults
 );
 
-/** GET /api/special-tournament/:id */
+/** GET /api/special-tournament/:id/capacity-hints — Admin: dynamic lobby cap, invite headroom, semifinal hint */
 router.get(
-  '/:id',
+  '/:id/capacity-hints',
   authenticate,
-  getSpecialTournamentDetails
+  isAdmin,
+  getSpecialTournamentCapacityHints
 );
 
 /** GET /api/special-tournament/:id/admin-report — Admin only: full results, every lobby/slot */
@@ -76,6 +82,16 @@ router.get(
   authenticate,
   isAdmin,
   getSpecialTournamentAdminReport
+);
+
+/** GET /api/special-tournament/:id/stream — SSE: snapshot + update on each join (Bearer or ?access_token=) */
+router.get('/:id/stream', authenticateUserSse, streamSpecialTournament);
+
+/** GET /api/special-tournament/:id */
+router.get(
+  '/:id',
+  authenticate,
+  getSpecialTournamentDetails
 );
 
 // ---------------------------------------------------------------------------
@@ -93,16 +109,77 @@ router.post(
     body('subMode').isIn(['solo', 'duo', 'squad', '1v1', '2v2', '4v4']).withMessage('Invalid subMode'),
     body('prizePool').isFloat({ min: 1 }).withMessage('prizePool must be at least 1 GC'),
     body('maxSlots').isInt({ min: 2 }).withMessage('maxSlots must be at least 2'),
-    body('rounds').isArray({ min: 1 }).withMessage('rounds must be a non-empty array'),
-    body('rounds.*.roundNumber').isInt({ min: 1 }).withMessage('Each round must have roundNumber >= 1'),
-    body('rounds.*.teamsPerSlot').isInt({ min: 2 }).withMessage('Each round must have teamsPerSlot >= 2'),
-    body('rounds.*.matchesPerSlot').isInt({ min: 1 }).withMessage('Each round must have matchesPerSlot >= 1'),
-    body('rounds.*.qualifyPerSlot').isInt({ min: 1 }).withMessage('Each round must have qualifyPerSlot >= 1'),
+    body('rounds').optional().isArray(),
+    body('rounds.*.roundNumber').optional().isInt({ min: 1 }).withMessage('Each round must have roundNumber >= 1'),
+    body('rounds.*.teamsPerSlot').optional().isInt({ min: 2 }).withMessage('Each round must have teamsPerSlot >= 2'),
+    body('rounds.*.matchesPerSlot').optional().isInt({ min: 1 }).withMessage('Each round must have matchesPerSlot >= 1'),
+    body('rounds.*.qualifyPerSlot').optional().isInt({ min: 1 }).withMessage('Each round must have qualifyPerSlot >= 1'),
+    body('rounds.*.roundName').optional().trim().isLength({ max: 80 }),
+    body('rounds.*.slotSizes').optional().isArray(),
+    body('rounds.*.slotSizes.*').optional().isInt({ min: 2, max: 32 }),
+    body('rounds.*.inviteSlotCaps').optional().isArray(),
+    body('rounds.*.inviteSlotCaps.*').optional().isInt({ min: 0, max: 16 }),
+    body('rounds.*.inviteSlotsPerSlot').optional().isInt({ min: 0, max: 16 }),
+    body('bracketAuto').optional().isObject().withMessage('bracketAuto must be an object'),
+    body('bracketAuto.qualifyPerSlot').optional().isInt({ min: 1, max: 30 }),
+    body('bracketAuto.matchesPerSlot').optional().isInt({ min: 1, max: 99 }),
+    body('game').optional().trim().isLength({ max: 80 }),
+    body('region').optional().isIn(['Asia', 'Global']).withMessage('region must be Asia or Global'),
+    body().custom((_, { req }) => {
+      const hasRounds = Array.isArray(req.body.rounds) && req.body.rounds.length > 0;
+      const ba = req.body.bracketAuto;
+      const hasAuto = ba != null && typeof ba === 'object' && ba.qualifyPerSlot != null && ba.qualifyPerSlot !== '';
+      if (hasRounds && hasAuto) {
+        throw new Error('Send either rounds or bracketAuto, not both');
+      }
+      if (!hasRounds && !hasAuto) {
+        throw new Error('Send rounds[] or bracketAuto: { qualifyPerSlot, matchesPerSlot? }');
+      }
+      if (hasAuto && req.body.mode !== 'BR') {
+        throw new Error('bracketAuto requires mode BR');
+      }
+      if (hasAuto && (!req.body.game || !String(req.body.game).trim())) {
+        throw new Error('game is required with bracketAuto (BGMI → 16/lobby, Free Fire → 12)');
+      }
+      return true;
+    }),
+    body().custom((_, { req }) => {
+      const hasPd = Array.isArray(req.body.prizeDistribution) && req.body.prizeDistribution.length > 0;
+      const hasRr = (Array.isArray(req.body.rankRewards) && req.body.rankRewards.length > 0)
+        || (Array.isArray(req.body.prizeByRank) && req.body.prizeByRank.length > 0);
+      if (!hasPd && !hasRr) {
+        throw new Error('Provide prizeDistribution or rankRewards (or prizeByRank)');
+      }
+      return true;
+    }),
     body('prizeDistribution').optional().isArray(),
     body('prizeDistribution.*.position').optional().isInt({ min: 1 }),
     body('prizeDistribution.*.percent').optional().isFloat({ min: 0, max: 100 }),
+    body('rankRewards').optional().isArray(),
+    body('rankRewards.*.position').optional().isInt({ min: 1 }),
+    body('rankRewards.*.amount').optional().isFloat({ min: 0 }),
+    body('prizeByRank').optional().isArray(),
+    body('prizeByRank.*.position').optional().isInt({ min: 1 }),
+    body('prizeByRank.*.amount').optional().isFloat({ min: 0 }),
+    body('registrationPeriodStart').optional().isISO8601(),
+    body('registrationPeriodEnd').optional().isISO8601(),
+    body('registrationStartDate').optional().isISO8601(),
+    body('registrationDeadline').optional().isISO8601(),
+    body('tournamentStartDate').optional().isISO8601(),
+    body('tournamentEndDate').optional().isISO8601(),
+    body('scheduledDate').optional().isISO8601(),
     body('scheduledEndDate').optional().isISO8601().withMessage('scheduledEndDate must be valid ISO date'),
+    body('scheduledTime').optional().trim().isLength({ max: 32 }),
+    body('tournamentFormat').optional().trim().isLength({ max: 120 }),
     body('formatLabel').optional().trim().isLength({ max: 200 }).withMessage('formatLabel max 200 chars'),
+    body('logoUrl').optional().trim().isLength({ max: 500 }),
+    body('youtubeStreamUrl').optional().trim().isLength({ max: 500 }),
+    body('lobbyName').optional().trim().isLength({ max: 100 }),
+    body('description').optional().trim().isLength({ max: 5000 }),
+    body('sponsors').optional().isArray(),
+    body('sponsors.*.name').optional().trim().isLength({ max: 100 }),
+    body('sponsors.*.logoUrl').optional().trim().isLength({ max: 500 }),
+    body('sponsors.*.link').optional().trim().isLength({ max: 500 }),
     body('sponsorHandles').optional().isObject().withMessage('sponsorHandles must be an object'),
     body('sponsorHandles.instagram').optional().trim().isLength({ max: 200 }),
     body('sponsorHandles.discord').optional().trim().isLength({ max: 200 }),
@@ -129,14 +206,48 @@ router.post(
       .trim()
       .isLength({ max: 50 }).withMessage('teamName cannot exceed 50 characters'),
     body('players')
-      .isArray({ min: 3, max: 4 }).withMessage('players must have 3 or 4 items (4 or 5 total with leader; 4 compulsory, max 5)'),
+      .optional()
+      .custom((val) => {
+        const arr = val === undefined || val === null ? [] : val;
+        if (!Array.isArray(arr)) throw new Error('players must be an array');
+        if (arr.length > 4) {
+          throw new Error('At most 4 teammate names (5 players including leader). Need ≥3 teammates for round 1 slot.');
+        }
+        return true;
+      }),
     body('players.*')
+      .optional()
       .isString().withMessage('Each player name must be a string')
       .trim()
       .isLength({ max: 50 }).withMessage('Player name cannot exceed 50 characters')
   ],
   validate,
   joinSpecialTournament
+);
+
+/** PATCH /api/special-tournament/:id/team — leader updates teammate names during registration (0–4 names) */
+router.patch(
+  '/:id/team',
+  authenticate,
+  [
+    body('players')
+      .optional()
+      .custom((val) => {
+        const arr = val === undefined || val === null ? [] : val;
+        if (!Array.isArray(arr)) throw new Error('players must be an array');
+        if (arr.length > 4) {
+          throw new Error('At most 4 teammate names (5 including leader)');
+        }
+        return true;
+      }),
+    body('players.*')
+      .optional()
+      .isString().withMessage('Each player name must be a string')
+      .trim()
+      .isLength({ max: 50 }).withMessage('Player name cannot exceed 50 characters')
+  ],
+  validate,
+  updateSpecialTournamentTeamRoster
 );
 
 // ---------------------------------------------------------------------------
@@ -268,6 +379,30 @@ router.post(
   ],
   validate,
   startRound
+);
+
+/** POST /api/special-tournament/:id/round/:roundNum/slot/:slotIdx/add-invite-team */
+router.post(
+  '/:id/round/:roundNum/slot/:slotIdx/add-invite-team',
+  authenticate,
+  isAdmin,
+  [
+    param('roundNum').isInt({ min: 1 }).withMessage('roundNum must be a positive integer'),
+    param('slotIdx').isInt({ min: 0 }).withMessage('slotIdx must be a non-negative integer'),
+    body('leaderUserId').notEmpty().withMessage('leaderUserId is required'),
+    body('teamName').notEmpty().trim().isLength({ max: 50 }).withMessage('teamName is required (max 50)'),
+    body('players')
+      .optional()
+      .custom((val) => {
+        const arr = val === undefined || val === null ? [] : val;
+        if (!Array.isArray(arr)) throw new Error('players must be an array');
+        if (arr.length > 4) throw new Error('At most 4 teammate names per invite team');
+        return true;
+      }),
+    body('players.*').optional().isString().withMessage('Each player name must be a string')
+  ],
+  validate,
+  addInviteTeamToSlot
 );
 
 /** POST /api/special-tournament/:id/round/:roundNum/slot/:slotIdx/assign-host */

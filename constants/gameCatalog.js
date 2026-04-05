@@ -119,6 +119,13 @@ const resolveAnyGameTitle = (raw) => {
   return fromAny ? fromAny.game : null;
 };
 
+/** Max teams per in-game lobby/match for special-tournament slot sizing (BGMI vs Free Fire). */
+const maxTeamsPerSlotForGame = (canonicalTitle) => {
+  if (canonicalTitle === 'BGMI') return 16;
+  if (canonicalTitle === 'Free Fire') return 12;
+  return 16;
+};
+
 /** Keys for Mongo $expr / comparing stored tournament.game to profile titles (spacing + case agnostic). */
 const normalizeGameMatchKeysForDb = (titles) =>
   [...new Set(
@@ -262,6 +269,7 @@ module.exports = {
   canonicalizeGameNameFromAnyPlatform,
   slugToCanonicalGame,
   resolveAnyGameTitle,
+  maxTeamsPerSlotForGame,
   normalizeGameMatchKeysForDb,
   matchesGameName,
   parseAdminGameTitles,

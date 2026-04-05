@@ -83,9 +83,12 @@ const getLobbyList = asyncHandler(async (req, res) => {
   const includePaid = type === 'all' || type === 'paid';
   const includeSponsored = type === 'all' || type === 'sponsored';
 
+  const isAdmin = req.user && req.user.role === 'admin';
   const [sponsoredAll, paidPaged] = await Promise.all([
     includeSponsored && mode !== 'LW'
-      ? tournamentService.getSpecialTournamentsForList(status, mode, subMode, resolvedGameTitles)
+      ? tournamentService.getSpecialTournamentsForList(status, mode, subMode, resolvedGameTitles, {
+          forAdmin: isAdmin
+        })
       : [],
     includePaid
       ? tournamentService.getTournamentsByStatus(
@@ -180,7 +183,7 @@ const joinLobby = asyncHandler(async (req, res) => {
   // sponsored (free entry)
   const userId = req.userId;
   try {
-    // SpecialTournament requires players length 3 or 4 (leader + 3/4 = total 4/5)
+    // SpecialTournament: 0–4 teammate names on join; ≥3 for round 1 eligibility
     const arr = Array.isArray(players) ? players : [];
     const tournament = await specialTournamentService.joinSpecialTournament(userId, lobbyId, teamName, arr);
     return res.success(HTTP_STATUS.OK, 'Successfully registered (free entry)', {
