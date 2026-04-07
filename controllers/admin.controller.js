@@ -220,19 +220,23 @@ const generateNextDayLobbies = asyncHandler(async (req, res) => {
  *   - For CS: ['clash'] (optional - 2 teams, max 4 per team, 1 match; 7/13 rounds host decides manually)
  *   - For BR: ['solo', 'duo', 'squad'] (required)
  *   - For LW: ['solo', 'duo', 'squad', '1v1', '2v2'] (optional - if not provided, defaults to ['1v1']. If '1v1' is selected, '2v2' is automatically included)
- * - price: Single entry fee value (optional, for single price)
- * - entryFees: Array of entry fees [25, 50, 75, 100, 200, 300] (optional, defaults to mode config)
+ * - price: Single entry fee value (optional, for single price; use 0 for free/invite testing lobby)
+ * - entryFees: Array of entry fees [0, 25, 50, 75, 100, 150, 200, 300] (optional, defaults to mode config)
  * - region: 'Asia' or 'Global' (optional, default: 'Global')
+ * - lobbyName: Custom lobby name (optional, if provided it overrides default generated name)
+ * - customLobbyName / name / lobbyname: Alias keys for custom lobby name (optional, backward-compatible)
  */
 const generateLobbies = asyncHandler(async (req, res) => {
-  const { date, timeSlots, mode, subModes, price, entryFees, region } = req.body;
+  const { date, timeSlots, mode, subModes, price, entryFees, entryfee, region, lobbyName, customLobbyName, name, lobbyname } = req.body;
+  const finalLobbyName = lobbyName || customLobbyName || name || lobbyname;
   
   // Support both 'price' (single value) and 'entryFees' (array) for backward compatibility
   // If 'price' is provided, convert it to 'entryFees' array
   let finalEntryFees = entryFees;
-  if (price !== undefined && price !== null) {
+  const normalizedSinglePrice = price !== undefined && price !== null ? Number(price) : (entryfee !== undefined && entryfee !== null ? Number(entryfee) : undefined);
+  if (normalizedSinglePrice !== undefined) {
     // Convert single price to array
-    finalEntryFees = [Number(price)];
+    finalEntryFees = [normalizedSinglePrice];
   }
 
   // Validate required fields
@@ -276,7 +280,8 @@ const generateLobbies = asyncHandler(async (req, res) => {
       mode,
       subModes: finalSubModes,
       entryFees: finalEntryFees,
-      region: region || 'Global'
+      region: region || 'Global',
+      lobbyName: finalLobbyName
     });
 
     const { tournaments, skippedTimeSlots } = result;
@@ -2751,105 +2756,193 @@ const getDashboardStats = asyncHandler(async (req, res) => {
 const getAnalytics = asyncHandler(async (req, res) => {
   const { period = 'daily' } = req.query;
   const WalletHistory = require('../models/WalletHistory.model');
-
-  let groupBy = {};
-  let daysToLookBack = 7; // Default for daily
-
-  if (period === 'daily') {
-    groupBy = { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } };
-    daysToLookBack = 7;
-  } else if (period === 'weekly') {
-    // Group by start of week (Sunday)
-    groupBy = { $dateToString: { format: '%Y-%U', date: '$createdAt' } };
-    daysToLookBack = 30; // ~4 weeks
-  } else if (period === 'monthly') {
-    groupBy = { $dateToString: { format: '%Y-%m', date: '$createdAt' } };
-    daysToLookBack = 180; // ~6 months
+  const Tournament = require('../models/Tournament.model');
+  const validPeriods = ['daily', 'weekly', 'monthly'];
+  if (!validPeriods.includes(period)) {
+    return res.badRequest('Invalid period. Use daily, weekly, or monthly.');
   }
 
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - daysToLookBack);
-  startDate.setHours(0, 0, 0, 0);
+  const periodConfig = {
+    daily: { count: 7, format: '%Y-%m-%d' },
+    weekly: { count: 8, format: '%G-W%V' },
+    monthly: { count: 6, format: '%Y-%m' }
+  };
+  const { count, format } = periodConfig[period];
 
-  const analytics = await WalletHistory.aggregate([
-    {
-      $match: {
-        createdAt: { $gte: startDate },
-        type: { $in: ['topup', 'reward'] },
-        status: { $ne: 'fail' } // Exclude failed topups
-      }
-    },
-    {
-      $group: {
-        _id: groupBy,
-        deposits: {
-          $sum: {
-            $cond: [
-              { $and: [{ $eq: ['$type', 'topup'] }, { $eq: ['$status', 'success'] }] },
-              '$amountINR',
-              0
-            ]
-          }
-        },
-        rewards: {
-          $sum: {
-            $cond: [
-              { $eq: ['$type', 'reward'] },
-              '$amountINR',
-              0
-            ]
-          }
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const asUtcDateOnly = (d) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const startOfIsoWeekUTC = (date) => {
+    const d = asUtcDateOnly(date);
+    const day = d.getUTCDay() || 7; // Sunday=7 for ISO
+    d.setUTCDate(d.getUTCDate() - day + 1); // Monday
+    return d;
+  };
+
+  const toBucketLabel = (date) => {
+    if (period === 'daily') {
+      return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+    }
+    if (period === 'weekly') {
+      const weekStart = startOfIsoWeekUTC(date);
+      const thursday = new Date(weekStart);
+      thursday.setUTCDate(weekStart.getUTCDate() + 3);
+      const isoYear = thursday.getUTCFullYear();
+      const firstWeekStart = startOfIsoWeekUTC(new Date(Date.UTC(isoYear, 0, 4)));
+      const diffDays = Math.floor((weekStart - firstWeekStart) / 86400000);
+      const isoWeek = Math.floor(diffDays / 7) + 1;
+      return `${isoYear}-W${pad2(isoWeek)}`;
+    }
+    return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}`;
+  };
+
+  const alignToPeriodStart = (date) => {
+    const d = new Date(date);
+    if (period === 'daily') return asUtcDateOnly(d);
+    if (period === 'weekly') return startOfIsoWeekUTC(d);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  };
+
+  const addPeriod = (date, delta) => {
+    const d = new Date(date);
+    if (period === 'daily') d.setUTCDate(d.getUTCDate() + delta);
+    else if (period === 'weekly') d.setUTCDate(d.getUTCDate() + (delta * 7));
+    else d.setUTCMonth(d.getUTCMonth() + delta);
+    return d;
+  };
+
+  const currentPeriodStart = alignToPeriodStart(new Date());
+  const firstPeriodStart = addPeriod(currentPeriodStart, -(count - 1));
+
+  const [incomeAgg, depositsAgg, withdrawalsAgg, overallIncomeAgg, overallDepositsAgg, overallWithdrawalsAgg] = await Promise.all([
+    Tournament.aggregate([
+      {
+        $match: {
+          status: 'completed',
+          updatedAt: { $gte: firstPeriodStart }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format, date: '$updatedAt', timezone: 'UTC' } },
+          platformFee: { $sum: { $ifNull: ['$platformFees.platformFee', 0] } },
+          casterFee: { $sum: { $ifNull: ['$platformFees.casterFee', 0] } }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          key: '$_id',
+          platformFee: 1,
+          casterFee: 1,
+          totalIncome: { $add: ['$platformFee', '$casterFee'] }
         }
       }
-    },
-    {
-      $project: {
-        date: '$_id',
-        deposits: 1,
-        rewards: 1,
-        profit: { $subtract: ['$deposits', '$rewards'] }
+    ]),
+    WalletHistory.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: firstPeriodStart },
+          type: 'topup',
+          status: 'success',
+          addedBy: 'user'
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format, date: '$createdAt', timezone: 'UTC' } },
+          totalDeposit: { $sum: '$amountINR' }
+        }
+      },
+      { $project: { _id: 0, key: '$_id', totalDeposit: 1 } }
+    ]),
+    WalletHistory.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: firstPeriodStart },
+          type: 'withdrawal',
+          status: 'success'
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format, date: '$createdAt', timezone: 'UTC' } },
+          totalWithdraw: { $sum: '$amountINR' }
+        }
+      },
+      { $project: { _id: 0, key: '$_id', totalWithdraw: 1 } }
+    ]),
+    Tournament.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: null,
+          platformFee: { $sum: { $ifNull: ['$platformFees.platformFee', 0] } },
+          casterFee: { $sum: { $ifNull: ['$platformFees.casterFee', 0] } }
+        }
       }
-    },
-    { $sort: { date: 1 } }
+    ]),
+    WalletHistory.aggregate([
+      { $match: { type: 'topup', status: 'success', addedBy: 'user' } },
+      { $group: { _id: null, totalDeposit: { $sum: '$amountINR' } } }
+    ]),
+    WalletHistory.aggregate([
+      { $match: { type: 'withdrawal', status: 'success' } },
+      { $group: { _id: null, totalWithdraw: { $sum: '$amountINR' } } }
+    ])
   ]);
 
-  // Handle gaps: create a map for easy lookup
-  const statsMap = new Map();
-  analytics.forEach(stat => statsMap.set(stat.date, stat));
+  const incomeMap = new Map(incomeAgg.map((row) => [row.key, row]));
+  const depositMap = new Map(depositsAgg.map((row) => [row.key, row.totalDeposit]));
+  const withdrawMap = new Map(withdrawalsAgg.map((row) => [row.key, row.totalWithdraw]));
 
-  const result = [];
-  const current = new Date(startDate);
-  const now = new Date();
+  const data = [];
+  for (let i = 0; i < count; i++) {
+    const pointDate = addPeriod(firstPeriodStart, i);
+    const key = toBucketLabel(pointDate);
+    const incomeData = incomeMap.get(key) || {};
+    const platformFee = incomeData.platformFee || 0;
+    const casterFee = incomeData.casterFee || 0;
+    const totalIncome = incomeData.totalIncome || 0;
+    const totalDeposit = depositMap.get(key) || 0;
+    const totalWithdraw = withdrawMap.get(key) || 0;
 
-  while (current <= now) {
-    let dateStr = '';
-    if (period === 'daily') {
-      dateStr = current.toISOString().split('T')[0];
-      current.setDate(current.getDate() + 1);
-    } else if (period === 'weekly') {
-      // Very simplistic weekly grouping for now
-      const year = current.getFullYear();
-      const week = Math.floor((current.getDate() + 6) / 7); // Not perfect but consistent with aggregation $U logic-ish
-      // Actually aggregation $U is week number of year. 
-      // Let's just use the aggregation date labels for now and not fill gaps for weekly/monthly to keep it simple,
-      // OR just return the aggregation result.
-      break; 
-    } else {
-      break;
-    }
-
-    if (period === 'daily') {
-      const stat = statsMap.get(dateStr) || { date: dateStr, deposits: 0, rewards: 0, profit: 0 };
-      result.push(stat);
-    }
+    data.push({
+      period: key,
+      platformFee,
+      casterFee,
+      totalIncome,
+      totalDeposit,
+      totalWithdraw,
+      // Backward compatibility for existing chart keys
+      date: key,
+      deposits: totalDeposit,
+      withdrawals: totalWithdraw,
+      profit: totalIncome
+    });
   }
 
-  // If we broke out (weekly/monthly) or just return the aggregation if result is empty
-  const finalData = result.length > 0 ? result : analytics;
+  const selectedPeriodTotals = data.reduce(
+    (acc, item) => {
+      acc.totalIncome += item.totalIncome;
+      acc.totalDeposit += item.totalDeposit;
+      acc.totalWithdraw += item.totalWithdraw;
+      return acc;
+    },
+    { totalIncome: 0, totalDeposit: 0, totalWithdraw: 0 }
+  );
+
+  const allIncome = overallIncomeAgg[0] || {};
+  const overallTotals = {
+    totalIncome: (allIncome.platformFee || 0) + (allIncome.casterFee || 0),
+    totalDeposit: overallDepositsAgg[0]?.totalDeposit || 0,
+    totalWithdraw: overallWithdrawalsAgg[0]?.totalWithdraw || 0
+  };
 
   res.success(HTTP_STATUS.OK, `Analytics (${period}) retrieved successfully`, {
     period,
-    data: finalData
+    data,
+    selectedPeriodTotals,
+    overallTotals
   });
 });
 

@@ -392,14 +392,14 @@
  *                   For LW: ['solo', 'duo', 'squad', '1v1', '2v2'] (optional - if not provided, defaults to ['1v1']. If '1v1' is selected, '2v2' is automatically included)
  *               price:
  *                 type: number
- *                 enum: [25, 50, 75, 100, 150, 200, 300]
+ *                 enum: [0, 25, 50, 75, 100, 150, 200, 300]
  *                 example: 100
- *                 description: Single entry fee in GC. If provided, creates lobbies with this price. Alternative to entryFees array.
+ *                 description: Single entry fee in GC. Use 0 for free/invite testing lobby. If provided, creates lobbies with this price. Alternative to entryFees array.
  *               entryFees:
  *                 type: array
  *                 items:
  *                   type: number
- *                   enum: [25, 50, 75, 100, 150, 200, 300]
+ *                   enum: [0, 25, 50, 75, 100, 150, 200, 300]
  *                 example: [100, 200, 300]
  *                 description: Array of entry fees in GC. If not provided, uses default from mode config. Multiple entry fees will create separate lobbies for each. If 'price' is provided, it takes precedence.
  *               region:
@@ -408,6 +408,18 @@
  *                 default: Global
  *                 example: Asia
  *                 description: Region selection (optional, defaults to Global)
+ *               lobbyName:
+ *                 type: string
+ *                 example: Invite Test Lobby
+ *                 description: Custom lobby name (optional). If provided, it overrides default generated name.
+ *               customLobbyName:
+ *                 type: string
+ *                 example: Invite Test Lobby
+ *                 description: Alias of lobbyName (optional).
+ *               name:
+ *                 type: string
+ *                 example: Invite Test Lobby
+ *                 description: Alias of lobbyName (optional).
  *     responses:
  *       201:
  *         description: Tournaments generated successfully

@@ -192,22 +192,63 @@ router.post(
       .withMessage('subMode must be valid for the selected mode (CS: not needed | BR: solo, duo, squad | LW: solo, duo, squad, 1v1, 2v2)'),
     body('price')
       .optional()
-      .isInt({ min: 1 })
-      .isIn([25, 50, 75, 100, 150, 200, 300])
-      .withMessage('price must be one of: 25, 50, 75, 100, 150, 200, 300'),
+      .isInt({ min: 0 })
+      .isIn([0, 25, 50, 75, 100, 150, 200, 300])
+      .withMessage('price must be one of: 0, 25, 50, 75, 100, 150, 200, 300'),
+    body('entryfee')
+      .optional()
+      .isInt({ min: 0 })
+      .isIn([0, 25, 50, 75, 100, 150, 200, 300])
+      .withMessage('entryfee must be one of: 0, 25, 50, 75, 100, 150, 200, 300'),
     body('entryFees')
       .optional()
       .isArray()
       .withMessage('entryFees must be an array'),
     body('entryFees.*')
       .optional()
-      .isInt({ min: 1 })
-      .isIn([25, 50, 75, 100, 150, 200, 300])
-      .withMessage('Each entryFee must be one of: 25, 50, 75, 100, 150, 200, 300'),
+      .isInt({ min: 0 })
+      .isIn([0, 25, 50, 75, 100, 150, 200, 300])
+      .withMessage('Each entryFee must be one of: 0, 25, 50, 75, 100, 150, 200, 300'),
     body('region')
       .optional()
       .isIn(['Asia', 'Global'])
-      .withMessage('region must be "Asia" or "Global"')
+      .withMessage('region must be "Asia" or "Global"'),
+    body('lobbyName')
+      .optional()
+      .isString()
+      .withMessage('lobbyName must be a string')
+      .trim()
+      .notEmpty()
+      .withMessage('lobbyName cannot be empty')
+      .isLength({ max: 100 })
+      .withMessage('lobbyName cannot exceed 100 characters'),
+    body('customLobbyName')
+      .optional()
+      .isString()
+      .withMessage('customLobbyName must be a string')
+      .trim()
+      .notEmpty()
+      .withMessage('customLobbyName cannot be empty')
+      .isLength({ max: 100 })
+      .withMessage('customLobbyName cannot exceed 100 characters'),
+    body('name')
+      .optional()
+      .isString()
+      .withMessage('name must be a string')
+      .trim()
+      .notEmpty()
+      .withMessage('name cannot be empty')
+      .isLength({ max: 100 })
+      .withMessage('name cannot exceed 100 characters'),
+    body('lobbyname')
+      .optional()
+      .isString()
+      .withMessage('lobbyname must be a string')
+      .trim()
+      .notEmpty()
+      .withMessage('lobbyname cannot be empty')
+      .isLength({ max: 100 })
+      .withMessage('lobbyname cannot exceed 100 characters')
   ],
   validate,
   generateLobbies

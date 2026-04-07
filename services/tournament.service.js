@@ -333,12 +333,13 @@ const generateNextDayLobbies = async () => {
  *   - For CS: ['clash'] (optional - if not provided, defaults to clash; 2 teams, max 4 players per team, 1 match, 7/13 rounds host decides manually)
  *   - For BR: ['solo', 'duo', 'squad'] (required)
  *   - For LW: ['solo', 'duo', 'squad', '1v1', '2v2'] (optional - if not provided, defaults to ['1v1']. If '1v1' is selected, '2v2' is automatically included)
- * @param {Array<number>} options.entryFees - Array of entry fees [25, 50, 75, 100, 200, 300] (optional, defaults to mode config)
+ * @param {Array<number>} options.entryFees - Array of entry fees [0, 25, 50, 75, 100, 150, 200, 300] (optional, defaults to mode config)
  * @param {string} options.region - 'Asia' or 'Global' (default: 'Global')
+ * @param {string} [options.lobbyName] - Optional custom lobby name (overrides default generated name)
  * @returns {Promise<Array>} Array of created tournaments
  */
 const generateLobbies = async (options) => {
-  const { date, timeSlots, mode, subModes, entryFees, region = 'Global' } = options;
+  const { date, timeSlots, mode, subModes, entryFees, region = 'Global', lobbyName } = options;
 
   // Validate date
   if (!date) {
@@ -433,8 +434,19 @@ const generateLobbies = async (options) => {
     throw new Error('Invalid region. Must be "Asia" or "Global"');
   }
 
+  // Validate optional custom lobby name
+  const customLobbyName = typeof lobbyName === 'string' ? lobbyName.trim() : '';
+  if (lobbyName !== undefined) {
+    if (!customLobbyName) {
+      throw new Error('lobbyName cannot be empty');
+    }
+    if (customLobbyName.length > 100) {
+      throw new Error('lobbyName cannot exceed 100 characters');
+    }
+  }
+
   // Validate entry fees if provided
-  const VALID_ENTRY_FEES = [25, 50, 75, 100, 150, 200, 300];
+  const VALID_ENTRY_FEES = [0, 25, 50, 75, 100, 150, 200, 300];
   let validEntryFees = [];
   if (entryFees && Array.isArray(entryFees) && entryFees.length > 0) {
     for (const fee of entryFees) {
@@ -514,8 +526,10 @@ const generateLobbies = async (options) => {
         const potentialTotalPrizePool = maxTeams * entryFee;
         const potentialPrizePoolBreakdown = calculatePrizePoolBreakdown(potentialTotalPrizePool, mode, entryFee);
 
-        // Generate lobby name: "Lobby 1 75 10:15 PM" (includes entry fee and full time for easy identification)
-        const lobbyName = `Lobby ${lobbyNumber} ${entryFee} ${startTime}`;
+        // Generate default lobby name: "Lobby 1 75 10:15 PM" (includes entry fee and full time for easy identification)
+        // If admin sends custom lobbyName, use that instead.
+        const generatedLobbyName = `Lobby ${lobbyNumber} ${entryFee} ${startTime}`;
+        const finalLobbyName = customLobbyName || generatedLobbyName;
 
         // IMPORTANT: Each lobby is created without a host. Hosts must apply separately for each tournament.
         // No automatic host assignment - each lobby requires individual host application.
@@ -557,7 +571,7 @@ const generateLobbies = async (options) => {
           },
           status: 'upcoming',
           region,
-          lobbyName: lobbyName,
+          lobbyName: finalLobbyName,
           results: []
         });
       }
