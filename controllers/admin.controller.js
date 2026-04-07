@@ -227,16 +227,45 @@ const generateNextDayLobbies = asyncHandler(async (req, res) => {
  * - customLobbyName / name / lobbyname: Alias keys for custom lobby name (optional, backward-compatible)
  */
 const generateLobbies = asyncHandler(async (req, res) => {
-  const { date, timeSlots, mode, subModes, price, entryFees, entryfee, region, lobbyName, customLobbyName, name, lobbyname } = req.body;
+  const {
+    date,
+    timeSlots,
+    mode,
+    subModes,
+    price,
+    entryFees,
+    entryfee,
+    entryFee,
+    region,
+    lobbyName,
+    customLobbyName,
+    name,
+    lobbyname
+  } = req.body;
   const finalLobbyName = lobbyName || customLobbyName || name || lobbyname;
   
-  // Support both 'price' (single value) and 'entryFees' (array) for backward compatibility
-  // If 'price' is provided, convert it to 'entryFees' array
+  // Support both single-fee and multi-fee payloads without silently falling back.
   let finalEntryFees = entryFees;
-  const normalizedSinglePrice = price !== undefined && price !== null ? Number(price) : (entryfee !== undefined && entryfee !== null ? Number(entryfee) : undefined);
+  // Accept all common frontend keys for single-fee lobby creation.
+  // Priority order keeps explicit "price" behavior unchanged.
+  const singleFeeRaw =
+    price !== undefined && price !== null
+      ? price
+      : (entryfee !== undefined && entryfee !== null
+        ? entryfee
+        : (entryFee !== undefined && entryFee !== null ? entryFee : undefined));
+  const normalizedSinglePrice = singleFeeRaw !== undefined ? Number(singleFeeRaw) : undefined;
   if (normalizedSinglePrice !== undefined) {
-    // Convert single price to array
+    // Single fee payload -> array form expected by service
     finalEntryFees = [normalizedSinglePrice];
+  } else if (finalEntryFees !== undefined && !Array.isArray(finalEntryFees)) {
+    // Frontends sometimes send entryFees: 0 instead of [0]
+    const normalizedScalarFee = Number(finalEntryFees);
+    if (Number.isFinite(normalizedScalarFee)) {
+      finalEntryFees = [normalizedScalarFee];
+    } else {
+      return res.badRequest('entryFees must be an array (e.g., [0]) or a numeric fee value');
+    }
   }
 
   // Validate required fields
